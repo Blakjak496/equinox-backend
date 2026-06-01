@@ -170,6 +170,12 @@ function isValidType(value: string | null): value is ContractType {
 export async function handleFreightAutocomplete(
   interaction: AutocompleteInteraction,
 ) {
+  console.log(
+    "interaction type:",
+    interaction.type,
+    "isAutocomplete:",
+    interaction.isAutocomplete(),
+  );
   const focused = interaction.options.getFocused(true);
   const pickup = interaction.options.getString("pickup");
   const focusedValue = String(focused.value ?? "").toLowerCase();

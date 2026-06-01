@@ -186,13 +186,20 @@ export async function handleFreightAutocomplete(
   }
 
   if (focused.name === "destination") {
-    const connections = pickup
-      ? await Route.find({ systems: pickup }).then((routes) =>
-          routes.flatMap((route) => route.systems.filter((s) => s !== pickup)),
-        )
-      : [];
+    const routes = await Route.find({});
+    console.log("total routes:", routes.length);
+    console.log("pickup:", pickup);
+    const allDestinations = routes.flatMap((route) => route.systems);
 
-    const choices = connections
+    const connections = pickup
+      ? routes
+          .filter((route) => route.systems.includes(pickup))
+          .flatMap((route) => route.systems.filter((s) => s !== pickup))
+      : allDestinations;
+
+    console.log("connections:", connections);
+
+    const choices = [...new Set(connections)]
       .filter((system) => system.toLowerCase().includes(focusedValue))
       .slice(0, 25)
       .map((system) => ({ name: system, value: system }));

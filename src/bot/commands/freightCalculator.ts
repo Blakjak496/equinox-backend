@@ -14,6 +14,8 @@ type ContractType = (typeof VALID_TYPES)[number];
 export async function handleFreightCalculator(
   interaction: ChatInputCommandInteraction,
 ) {
+  await interaction.deferReply({ ephemeral: true });
+
   const pickup = interaction.options.getString("pickup");
   const destination = interaction.options.getString("destination");
   const rawVolume = interaction.options.getNumber("volume");
@@ -21,9 +23,8 @@ export async function handleFreightCalculator(
   const contractType = interaction.options.getString("type");
 
   if (!pickup || !destination) {
-    await interaction.reply({
+    await interaction.editReply({
       content: "Pickup and destination are required.",
-      ephemeral: true,
     });
     return;
   }
@@ -33,9 +34,8 @@ export async function handleFreightCalculator(
   });
 
   if (!route) {
-    await interaction.reply({
+    await interaction.editReply({
       content: "That route is not currently supported.",
-      ephemeral: true,
     });
     return;
   }
@@ -45,25 +45,22 @@ export async function handleFreightCalculator(
     Number.isNaN(rawVolume) ||
     rawVolume <= 0
   ) {
-    await interaction.reply({
+    await interaction.editReply({
       content: "Volume must be a valid number and greater than 0.",
-      ephemeral: true,
     });
     return;
   }
 
   if (rawVolume > route.terms.maxVolume) {
-    await interaction.reply({
+    await interaction.editReply({
       content: `Volume exceeds the maximum allowed for this route (${route.terms.maxVolume.toLocaleString()} m³).`,
-      ephemeral: true,
     });
     return;
   }
 
   if (!collateralInput) {
-    await interaction.reply({
+    await interaction.editReply({
       content: "Collateral is required.",
-      ephemeral: true,
     });
     return;
   }
@@ -71,10 +68,9 @@ export async function handleFreightCalculator(
   const collateral = parseIskInput(collateralInput);
 
   if (collateral === null || collateral < 0) {
-    await interaction.reply({
+    await interaction.editReply({
       content:
         "Collateral must be a valid ISK amount, e.g. 10b, 500m, 10000000000",
-      ephemeral: true,
     });
     return;
   }
@@ -82,17 +78,15 @@ export async function handleFreightCalculator(
   const { maxCollateral } = getConfig();
 
   if (collateral > maxCollateral) {
-    await interaction.reply({
+    await interaction.editReply({
       content: `Max collateral exceeded. Max collateral per contract is ${maxCollateral.toLocaleString()} ISK`,
-      ephemeral: true,
     });
     return;
   }
 
   if (!isValidType(contractType)) {
-    await interaction.reply({
+    await interaction.editReply({
       content: "Type must be either normal or rush.",
-      ephemeral: true,
     });
     return;
   }
@@ -157,9 +151,8 @@ export async function handleFreightCalculator(
     )
     .setFooter({ text: `Equinox Galactic - ${timeLabel}` });
 
-  await interaction.reply({
+  await interaction.editReply({
     embeds: [embed],
-    ephemeral: true,
   });
 }
 
@@ -170,12 +163,6 @@ function isValidType(value: string | null): value is ContractType {
 export async function handleFreightAutocomplete(
   interaction: AutocompleteInteraction,
 ) {
-  console.log(
-    "interaction type:",
-    interaction.type,
-    "isAutocomplete:",
-    interaction.isAutocomplete(),
-  );
   const focused = interaction.options.getFocused(true);
   const pickup = interaction.options.getString("pickup");
   const focusedValue = String(focused.value ?? "").toLowerCase();
@@ -193,8 +180,6 @@ export async function handleFreightAutocomplete(
 
   if (focused.name === "destination") {
     const routes = await Route.find({});
-    console.log("total routes:", routes.length);
-    console.log("pickup:", pickup);
     const allDestinations = routes.flatMap((route) => route.systems);
 
     const connections = pickup
@@ -202,8 +187,6 @@ export async function handleFreightAutocomplete(
           .filter((route) => route.systems.includes(pickup))
           .flatMap((route) => route.systems.filter((s) => s !== pickup))
       : allDestinations;
-
-    console.log("connections:", connections);
 
     const choices = [...new Set(connections)]
       .filter((system) => system.toLowerCase().includes(focusedValue))

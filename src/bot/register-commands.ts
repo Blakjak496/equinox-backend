@@ -1,4 +1,7 @@
 import { REST, Routes, SlashCommandBuilder } from "discord.js";
+import dotenv from "dotenv";
+
+dotenv.config();
 
 const applicationId = process.env.DISCORD_APPLICATION_ID;
 const guildId = process.env.DISCORD_GUILD_ID;

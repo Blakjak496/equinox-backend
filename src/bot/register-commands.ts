@@ -70,12 +70,12 @@ async function main() {
     new SlashCommandBuilder()
       .setName("appraisal")
       .setDescription("Appraise items via Janice"),
-    new SlashCommandBuilder()
-      .setName("register")
-      .setDescription("Register your EVE character with the bot"),
-    new SlashCommandBuilder()
-      .setName("shopping_service")
-      .setDescription("Create a shopping service order"),
+    // new SlashCommandBuilder()
+    //   .setName("register")
+    //   .setDescription("Register your EVE character with the bot"),
+    // new SlashCommandBuilder()
+    //   .setName("shopping_service")
+    //   .setDescription("Create a shopping service order"),
   ].map((command) => command.toJSON());
 
   const rest = new REST({ version: "10" }).setToken(botToken);

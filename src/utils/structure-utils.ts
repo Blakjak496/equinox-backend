@@ -12,7 +12,6 @@ export const getOrFetchStructure = async (
   locationId: number,
   accessToken: string,
 ): Promise<IStructure | IStation | null> => {
-  console.log("locationId:", locationId);
   if (locationId <= stationIdCap) {
     const station = await Station.findOne({ stationId: Number(locationId) });
     if (station) return station;
@@ -69,11 +68,6 @@ export const getOrFetchStructure = async (
         type_id: number;
         position: { x: number; y: number; z: number };
       }>(url, accessToken, "EquinoxGalactic Admin (structures cache)");
-
-      console.log(
-        "structure response:",
-        JSON.stringify(structureResponse.json),
-      );
 
       checkEsiLimitFromHeader(structureResponse.headers);
 

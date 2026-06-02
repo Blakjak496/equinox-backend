@@ -70,6 +70,11 @@ export const getOrFetchStructure = async (
         position: { x: number; y: number; z: number };
       }>(url, accessToken, "EquinoxGalactic Admin (structures cache)");
 
+      console.log(
+        "structure response:",
+        JSON.stringify(structureResponse.json),
+      );
+
       checkEsiLimitFromHeader(structureResponse.headers);
 
       if (structureResponse.status === 403) {

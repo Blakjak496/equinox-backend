@@ -6,6 +6,9 @@ import { syncContracts } from "./services/syncContracts";
 import { initConfig } from "./lib/config";
 import authRouter from "./routes/auth";
 import cors from "cors";
+import { adminAuth } from "./lib/adminAuth";
+import adminRouter from "./routes/admin";
+import publicRouter from "./routes/public";
 
 dotenv.config();
 
@@ -22,6 +25,8 @@ app.use(
   }),
 );
 app.use("/auth", authRouter);
+app.use("/admin", adminAuth, adminRouter);
+app.use(publicRouter);
 
 app.get("/health", (req, res) => {
   res.json({ status: "ok" });
@@ -45,9 +50,4 @@ async function start() {
 start().catch((err) => {
   console.error("Failed to start server:", err);
   process.exit(1);
-});
-
-app.get("/debug/sync", async (req, res) => {
-  await syncContracts();
-  res.json({ ok: true });
 });

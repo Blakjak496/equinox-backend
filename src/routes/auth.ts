@@ -1,9 +1,10 @@
 import { Router } from "express";
 import { exchangeEveCode } from "../services/exchangeEveCode";
+import { adminAuth } from "../lib/adminAuth";
 
 const router = Router();
 
-router.post("/eve", async (req, res) => {
+router.post("/eve", adminAuth, async (req, res) => {
   try {
     const args = { ...req.body };
     const code = args.code;

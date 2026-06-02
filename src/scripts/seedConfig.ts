@@ -15,7 +15,7 @@ async function seed() {
   await mongoose.connect(uri);
   console.log("Connected to MongoDB");
 
-  await Config.findOneAndUpdate(ConfigInput, { upsert: true });
+  await Config.findOneAndUpdate({}, ConfigInput, { upsert: true });
   console.log("Seeded config values");
   await mongoose.disconnect();
 }

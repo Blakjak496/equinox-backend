@@ -101,7 +101,7 @@ export function buildContractNotificationPayload(
           },
           {
             name: "Accepted By",
-            value: acceptedByName,
+            value: acceptedByName || "Unassigned",
             inline: true,
           },
           {

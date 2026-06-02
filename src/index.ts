@@ -5,6 +5,7 @@ import cron from "node-cron";
 import { syncContracts } from "./services/syncContracts";
 import { initConfig } from "./lib/config";
 import authRouter from "./routes/auth";
+import cors from "cors";
 
 dotenv.config();
 
@@ -12,6 +13,14 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
+app.use(
+  cors({
+    origin: [
+      "https://equinox-galactic-admin.web.app",
+      "https://equinox-galactic.web.app",
+    ],
+  }),
+);
 app.use("/auth", authRouter);
 
 app.get("/health", (req, res) => {

@@ -3,6 +3,7 @@ import {
   Colors,
   EmbedBuilder,
   AutocompleteInteraction,
+  MessageFlags,
 } from "discord.js";
 import { getConfig } from "../../lib/config";
 import { Route } from "../../models/Routes";
@@ -14,7 +15,7 @@ type ContractType = (typeof VALID_TYPES)[number];
 export async function handleFreightCalculator(
   interaction: ChatInputCommandInteraction,
 ) {
-  await interaction.deferReply({ ephemeral: true });
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
   const pickup = interaction.options.getString("pickup");
   const destination = interaction.options.getString("destination");

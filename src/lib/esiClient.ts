@@ -1,9 +1,6 @@
 import { EsiAuth } from "../models/EsiAuth";
 import { decrypt } from "./crypto";
 
-const EVE_CLIENT_ID = process.env.EVE_CLIENT_ID;
-const EVE_CLIENT_SECRET = process.env.EVE_CLIENT_SECRET;
-
 let cachedToken: string | null = null;
 let tokenExpiresAt: number = 0;
 let refreshPromise: Promise<string> | null = null;
@@ -43,6 +40,9 @@ export async function getAccessToken(): Promise<string> {
 async function refreshAccessToken(
   refreshToken: string,
 ): Promise<{ accessToken: string; expiresIn: number }> {
+  const EVE_CLIENT_ID = process.env.EVE_CLIENT_ID;
+  const EVE_CLIENT_SECRET = process.env.EVE_CLIENT_SECRET;
+
   if (!EVE_CLIENT_ID || !EVE_CLIENT_SECRET) {
     throw new Error("EVE_CLIENT_ID or EVE_CLIENT_SECRET not set");
   }

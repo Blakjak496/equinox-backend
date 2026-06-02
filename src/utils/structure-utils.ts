@@ -65,7 +65,7 @@ export const getOrFetchStructure = async (
       const structureResponse = await fetchJsonWithBearer<{
         name: string;
         owner_id: number;
-        system_id: number;
+        solar_system_id: number;
         type_id: number;
         position: { x: number; y: number; z: number };
       }>(url, accessToken, "EquinoxGalactic Admin (structures cache)");
@@ -107,7 +107,7 @@ export const getOrFetchStructure = async (
         );
       }
 
-      const systemId = structureResponse.json.system_id;
+      const systemId = structureResponse.json.solar_system_id;
       const typeId = structureResponse.json.type_id;
 
       const system: ISystem | null = await ensureSystemIsCached(systemId);

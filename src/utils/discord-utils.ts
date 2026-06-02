@@ -23,15 +23,15 @@ function getEmbedColor(
     | null,
   isRush: boolean,
 ) {
-  if (isOverdue) return embedColors.red;
   if (
     status === "finished" ||
     status === "finished_contractor" ||
     status === "finished_issuer"
   )
     return embedColors.green;
+  if (status === "deleted" || status === "cancelled") return embedColors.grey;
+  if (isOverdue) return embedColors.red;
   if (status === "in_progress") return embedColors.blue;
-  if (status === "deleted") return embedColors.grey;
   if (isRush) return embedColors.purple;
   return embedColors.yellow;
 }
@@ -67,7 +67,7 @@ export function buildContractNotificationPayload(
   if (mentionRole === "equinox") roleId = process.env.DISCORD_EQUINOX_ROLE_ID;
   if (mentionRole === "hauler") roleId = process.env.DISCORD_HAULER_ROLE_ID;
   return {
-    content: mentionRole ? `<@${roleId}>` : undefined,
+    content: mentionRole ? `<@&${roleId}>` : undefined,
     allowedMentions: mentionRole && roleId ? { roles: [roleId] } : undefined,
     embeds: [
       {

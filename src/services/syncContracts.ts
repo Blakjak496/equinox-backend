@@ -223,6 +223,12 @@ export async function syncContracts(): Promise<void> {
         if (!acceptor) acceptor = await getOrFetchCorporation(acceptorId);
       } else acceptor = null;
 
+      const discordChannelType =
+        pickupStructure?.systemName?.toLowerCase().includes("jita") ||
+        dropoffStructure?.systemName?.toLowerCase().includes("jita")
+          ? "jita"
+          : "default";
+
       const updatedContract = await Contract.findOneAndUpdate(
         { contractId: plan.esiContract.contract_id },
         {
@@ -254,8 +260,9 @@ export async function syncContracts(): Promise<void> {
           pickupStructure,
           dropoffStructure,
           validation,
+          discordChannelType,
         },
-        { upsert: true, new: true, setDefaultsOnInsert: true },
+        { upsert: true, returnDocument: "after", setDefaultsOnInsert: true },
       );
 
       if (!plan.existingContract) {

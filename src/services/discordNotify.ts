@@ -30,7 +30,6 @@ export async function notifyNewContract(
     },
   );
 
-  console.log("bot response status:", res.status);
   const text = await res.text();
   console.log("bot response body:", text);
   const json = JSON.parse(text) as { ok: boolean; messageId: string };

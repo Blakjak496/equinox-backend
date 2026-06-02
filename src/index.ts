@@ -46,3 +46,8 @@ start().catch((err) => {
   console.error("Failed to start server:", err);
   process.exit(1);
 });
+
+app.get("/debug/sync", async (req, res) => {
+  await syncContracts();
+  res.json({ ok: true });
+});

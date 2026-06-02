@@ -178,142 +178,141 @@ export async function syncContracts(): Promise<void> {
       structureMap.set(id, structuresAndStations[index] ?? null);
     });
 
-    await Promise.all(
-      writePlan.map(async (plan) => {
-        const pickupStructure = structureMap.get(
-          plan.esiContract.start_location_id,
-        );
-        const dropoffStructure = structureMap.get(
-          plan.esiContract.end_location_id,
-        );
+    for (const plan of writePlan) {
+      const pickupStructure = structureMap.get(
+        plan.esiContract.start_location_id,
+      );
+      const dropoffStructure = structureMap.get(
+        plan.esiContract.end_location_id,
+      );
 
-        const threeDaysMs = 259200000;
-        const isOverdue =
-          Date.now() - new Date(plan.esiContract.date_issued).getTime() >
-          threeDaysMs;
+      const threeDaysMs = 259200000;
+      const isOverdue =
+        Date.now() - new Date(plan.esiContract.date_issued).getTime() >
+        threeDaysMs;
 
-        const isRush = plan.esiContract.title.toLowerCase() === "rush";
-        const validation: IContractValidation =
-          !pickupStructure || !dropoffStructure
-            ? {
-                level: "fail",
-                reasons: ["Unable to validate"],
-                message: "Pickup or Dropoff locations are missing",
-              }
-            : await validateContract(
-                [pickupStructure.systemName!, dropoffStructure.systemName!],
-                plan.esiContract.volume,
-                plan.esiContract.collateral,
-                plan.esiContract.reward,
-              );
+      const isRush = plan.esiContract.title.toLowerCase() === "rush";
+      const validation: IContractValidation =
+        !pickupStructure || !dropoffStructure
+          ? {
+              level: "fail",
+              reasons: ["Unable to validate"],
+              message: "Pickup or Dropoff locations are missing",
+            }
+          : await validateContract(
+              [pickupStructure.systemName!, dropoffStructure.systemName!],
+              plan.esiContract.volume,
+              plan.esiContract.collateral,
+              plan.esiContract.reward,
+            );
 
-        const issuerId = plan.esiContract.issuer_id;
-        const issuerCorpId = plan.esiContract.issuer_corporation_id;
-        const acceptorId = plan.esiContract.acceptor_id;
+      const issuerId = plan.esiContract.issuer_id;
+      const issuerCorpId = plan.esiContract.issuer_corporation_id;
+      const acceptorId = plan.esiContract.acceptor_id;
 
-        const issuer: ICharacter | null = await getOrFetchCharacter(issuerId);
-        if (issuer && issuer.corporationId !== issuerCorpId)
-          await getOrFetchCharacter(issuer.characterId, true);
+      const issuer: ICharacter | null = await getOrFetchCharacter(issuerId);
+      if (issuer && issuer.corporationId !== issuerCorpId)
+        await getOrFetchCharacter(issuer.characterId, true);
 
-        const issuerCorp: ICorporation | null =
-          await getOrFetchCorporation(issuerCorpId);
+      const issuerCorp: ICorporation | null =
+        await getOrFetchCorporation(issuerCorpId);
 
-        let acceptor: ICharacter | ICorporation | null;
-        if (acceptorId) {
-          acceptor = await getOrFetchCharacter(acceptorId);
-          if (!acceptor) acceptor = await getOrFetchCorporation(acceptorId);
-        } else acceptor = null;
+      let acceptor: ICharacter | ICorporation | null;
+      if (acceptorId) {
+        acceptor = await getOrFetchCharacter(acceptorId);
+        if (!acceptor) acceptor = await getOrFetchCorporation(acceptorId);
+      } else acceptor = null;
 
-        const updatedContract = await Contract.findOneAndUpdate(
-          { contractId: plan.esiContract.contract_id },
-          {
-            contractId: plan.esiContract.contract_id,
-            type: plan.esiContract.type,
-            status: plan.esiContract.status,
-            dateIssued: plan.esiContract.date_issued,
-            dateExpired: plan.esiContract.date_expired,
-            dateAccepted: plan.esiContract.date_accepted,
-            dateCompleted: plan.esiContract.date_completed,
-            title: plan.esiContract.title,
-            volume: plan.esiContract.volume,
-            reward: plan.esiContract.reward,
-            collateral: plan.esiContract.collateral,
-            price: plan.esiContract.price,
-            buyout: plan.esiContract.buyout,
-            issuerId: plan.esiContract.issuer_id,
-            issuerCorporationId: plan.esiContract.issuer_corporation_id,
-            assigneeId: plan.esiContract.assignee_id,
-            acceptorId: plan.esiContract.acceptor_id,
-            acceptedByName: acceptor ? acceptor.name : null,
-            availability: plan.esiContract.availability,
-            forCorporation: plan.esiContract.for_corporation,
-            daysToComplete: plan.esiContract.days_to_complete,
-            startLocationId: plan.esiContract.start_location_id,
-            endLocationId: plan.esiContract.end_location_id,
-            isRush,
-            isOverdue,
-            pickupStructure,
-            dropoffStructure,
-            validation,
-          },
-          { upsert: true, new: true, setDefaultsOnInsert: true },
-        );
+      const updatedContract = await Contract.findOneAndUpdate(
+        { contractId: plan.esiContract.contract_id },
+        {
+          contractId: plan.esiContract.contract_id,
+          type: plan.esiContract.type,
+          status: plan.esiContract.status,
+          dateIssued: plan.esiContract.date_issued,
+          dateExpired: plan.esiContract.date_expired,
+          dateAccepted: plan.esiContract.date_accepted,
+          dateCompleted: plan.esiContract.date_completed,
+          title: plan.esiContract.title,
+          volume: plan.esiContract.volume,
+          reward: plan.esiContract.reward,
+          collateral: plan.esiContract.collateral,
+          price: plan.esiContract.price,
+          buyout: plan.esiContract.buyout,
+          issuerId: plan.esiContract.issuer_id,
+          issuerCorporationId: plan.esiContract.issuer_corporation_id,
+          assigneeId: plan.esiContract.assignee_id,
+          acceptorId: plan.esiContract.acceptor_id,
+          acceptedByName: acceptor ? acceptor.name : null,
+          availability: plan.esiContract.availability,
+          forCorporation: plan.esiContract.for_corporation,
+          daysToComplete: plan.esiContract.days_to_complete,
+          startLocationId: plan.esiContract.start_location_id,
+          endLocationId: plan.esiContract.end_location_id,
+          isRush,
+          isOverdue,
+          pickupStructure,
+          dropoffStructure,
+          validation,
+        },
+        { upsert: true, new: true, setDefaultsOnInsert: true },
+      );
 
-        if (!plan.existingContract) {
-          let newContract;
+      if (!plan.existingContract) {
+        let newContract;
+        try {
+          newContract = await notifyNewContract(updatedContract);
+        } catch (err) {
+          console.log(
+            "Something went wrong while sending the new contract notification: ",
+            err,
+          );
+        }
+        if (isOverdue && newContract) {
           try {
-            newContract = await notifyNewContract(updatedContract);
+            await pingOverdue(
+              newContract!.contractId,
+              newContract!.discordMessageId,
+              newContract!.discordChannelType,
+            );
           } catch (err) {
             console.log(
-              "Something went wrong while sending the new contract notification: ",
+              "Something went wrong while sending the overdue ping: ",
               err,
             );
           }
-          if (isOverdue && newContract) {
-            try {
-              await pingOverdue(
-                newContract!.contractId,
-                newContract!.discordMessageId,
-                newContract!.discordChannelType,
-              );
-            } catch (err) {
-              console.log(
-                "Something went wrong while sending the overdue ping: ",
-                err,
-              );
-            }
-          }
-        } else {
-          if (
-            plan.existingContract.status !== updatedContract.status ||
-            (isOverdue && !plan.existingContract.isOverdue)
-          ) {
-            try {
-              await notifyContractUpdate(updatedContract);
-            } catch (err) {
-              console.log(
-                "Something went wrong while updating the discord notification: ",
-                err,
-              );
-            }
-          }
-          if (!plan.existingContract.overduePingedAt && isOverdue) {
-            try {
-              await pingOverdue(
-                plan.existingContract.contractId,
-                plan.existingContract.discordMessageId,
-                plan.existingContract.discordChannelType,
-              );
-            } catch (err) {
-              console.log(
-                "Something went wrong while sending the overdue ping: ",
-                err,
-              );
-            }
+        }
+      } else {
+        if (
+          plan.existingContract.status !== updatedContract.status ||
+          (isOverdue && !plan.existingContract.isOverdue)
+        ) {
+          try {
+            await notifyContractUpdate(updatedContract);
+          } catch (err) {
+            console.log(
+              "Something went wrong while updating the discord notification: ",
+              err,
+            );
           }
         }
-      }),
-    );
+        if (!plan.existingContract.overduePingedAt && isOverdue) {
+          try {
+            await pingOverdue(
+              plan.existingContract.contractId,
+              plan.existingContract.discordMessageId,
+              plan.existingContract.discordChannelType,
+            );
+          } catch (err) {
+            console.log(
+              "Something went wrong while sending the overdue ping: ",
+              err,
+            );
+          }
+        }
+      }
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+    }
   } catch (err) {
     console.error("syncContracts error:", err);
   } finally {

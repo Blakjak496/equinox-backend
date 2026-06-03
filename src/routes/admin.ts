@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { Config } from "../models/Config";
 import { Route } from "../models/Routes";
+import { Stats } from "../models/Stats";
 
 const adminRouter = Router();
 
@@ -116,6 +117,18 @@ adminRouter.delete("/routes", async (req, res) => {
         .status(500)
         .json({ ok: false, message: "Failed to delete route", error: err });
     }
+  }
+});
+
+adminRouter.get("/stats", async (req, res) => {
+  try {
+    const stats = await Stats.findOne();
+    res.status(200).json({ ok: true, data: stats });
+  } catch (err) {
+    console.error("Failed to get stats:", err);
+    res
+      .status(500)
+      .json({ ok: false, message: "Failed to get stats", error: err });
   }
 });
 

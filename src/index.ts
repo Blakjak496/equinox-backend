@@ -24,11 +24,11 @@ app.use(
     ],
   }),
 );
-app.use("/auth", authRouter);
-app.use("/admin", adminAuth, adminRouter);
-app.use(publicRouter);
+app.use("/equinox/auth", authRouter);
+app.use("/equinox/admin", adminAuth, adminRouter);
+app.use("/equinox", publicRouter);
 
-app.get("/health", (req, res) => {
+app.get("/equinox/health", (req, res) => {
   res.json({ status: "ok" });
 });
 

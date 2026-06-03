@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { Route } from "../models/Routes";
+import { runJaniceAppraisal } from "../services/janiceAppraisal";
 
 const publicRouter = Router();
 
@@ -28,6 +29,23 @@ publicRouter.get("/routes", async (req, res) => {
     res
       .status(500)
       .json({ ok: false, message: "Failed to fetch routes", error: err });
+  }
+});
+
+publicRouter.post("/appraisal", async (req, res) => {
+  const { itemsText } = req.body;
+
+  if (!itemsText) {
+    res.status(400).json({ ok: false, message: "itemsText is required" });
+    return;
+  }
+
+  try {
+    const appraisal = await runJaniceAppraisal(itemsText);
+    res.status(200).json({ ok: true, data: appraisal });
+  } catch (err) {
+    console.error("Appraisal failed:", err);
+    res.status(500).json({ ok: false, message: "Appraisal failed" });
   }
 });
 

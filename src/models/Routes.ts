@@ -19,6 +19,17 @@ const RouteTermsSchema = new Schema<IRouteTerms>(
   { _id: false },
 );
 
+const PartialRouteTermsSchema = new Schema<Partial<IRouteTerms>>(
+  {
+    maxVolume: { type: Number },
+    minReward: { type: Number },
+    rate: { type: Number },
+    rushPrice: { type: Number },
+    collateralFeePercent: { type: Number },
+  },
+  { _id: false },
+);
+
 export interface IPricingOverride {
   tier: "public" | "corp";
   terms: Partial<IRouteTerms>;
@@ -27,7 +38,7 @@ export interface IPricingOverride {
 const PricingOverrideSchema = new Schema<IPricingOverride>(
   {
     tier: { type: String, enum: ["public", "corp"], required: true },
-    terms: { type: RouteTermsSchema, required: true },
+    terms: { type: PartialRouteTermsSchema, required: true },
   },
   { _id: false },
 );

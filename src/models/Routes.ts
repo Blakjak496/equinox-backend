@@ -60,6 +60,4 @@ const RouteSchema = new Schema<IRoute>(
   { timestamps: true },
 );
 
-RouteSchema.index({ systems: 1 }, { unique: true });
-
 export const Route = mongoose.model<IRoute>("Route", RouteSchema);

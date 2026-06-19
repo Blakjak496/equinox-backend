@@ -199,7 +199,11 @@ export async function handleFreightAutocomplete(
 
     const connections = pickup
       ? routes
-          .filter((route) => route.systems.includes(pickup))
+          .filter((route) => {
+            if (!route.systems.includes(pickup)) return false;
+            if (route.oneWay && route.systems[0] !== pickup) return false;
+            return true;
+          })
           .flatMap((route) => route.systems.filter((s) => s !== pickup))
       : allDestinations;
 

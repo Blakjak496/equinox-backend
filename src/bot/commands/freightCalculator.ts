@@ -41,6 +41,20 @@ export async function handleFreightCalculator(
     return;
   }
 
+  if (route.oneWay && route.systems[0] !== pickup) {
+    await interaction.editReply({
+      content: "That route is not currently supported.",
+    });
+    return;
+  }
+
+  if (!route) {
+    await interaction.editReply({
+      content: "That route is not currently supported.",
+    });
+    return;
+  }
+
   if (
     typeof rawVolume !== "number" ||
     Number.isNaN(rawVolume) ||

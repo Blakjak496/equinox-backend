@@ -303,7 +303,11 @@ export async function syncContracts(): Promise<void> {
             );
           }
         }
-        if (!plan.existingContract.overduePingedAt && isOverdue) {
+        if (
+          !plan.existingContract.overduePingedAt &&
+          isOverdue &&
+          plan.esiContract.status === "outstanding"
+        ) {
           try {
             await pingOverdue(
               plan.existingContract.contractId,

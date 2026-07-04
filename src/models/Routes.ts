@@ -47,7 +47,6 @@ export interface IRoute extends Document {
   systems: [string, string];
   oneWay: boolean;
   terms: IRouteTerms;
-  pricingOverrides: IPricingOverride[];
 }
 
 const RouteSchema = new Schema<IRoute>(
@@ -55,7 +54,6 @@ const RouteSchema = new Schema<IRoute>(
     systems: { type: [String], required: true },
     oneWay: { type: Boolean, required: true, default: false },
     terms: { type: RouteTermsSchema, required: true },
-    pricingOverrides: { type: [PricingOverrideSchema], default: [] },
   },
   { timestamps: true },
 );

@@ -88,6 +88,43 @@ export async function calculateOptimalRoute(
       findJumpPath(w!.systemId, dropoff.systemId, jumpRangeLY),
     );
 
+    // If exactly one of pickup/dropoff already sits on this route, it's
+    // reached for free no matter which waypoint anchors the detour - the
+    // freighter passes through it as part of its normal, already-scheduled
+    // run regardless. The only genuine extra cost is a round-trip spur
+    // from whichever established waypoint is closest to the *other*
+    // (off-route) point, out and back, with the rest of the route
+    // completely untouched. (If neither point is on the route, a spur
+    // can never beat a dedicated direct trip by the triangle inequality,
+    // so it's not worth searching; if both are on the route, servicing
+    // this delivery costs nothing extra, but that's a rare enough case
+    // not worth a dedicated candidate here.)
+    const pickupOnRoute = mainRoute.waypoints.includes(pickup.systemId);
+    const dropoffOnRoute = mainRoute.waypoints.includes(dropoff.systemId);
+
+    if (pickupOnRoute !== dropoffOnRoute) {
+      const toOffRoutePoint = pickupOnRoute ? toDropoff : toPickup;
+
+      for (let k = 0; k < waypointSystems.length; k++) {
+        const oneWayLY = legDistance(toOffRoutePoint[k]);
+        if (oneWayLY === null) continue;
+
+        const extraLY = 2 * oneWayLY;
+        if (!bestDetour || extraLY < bestDetour.extraLY) {
+          const oneWayPath = legPath(toOffRoutePoint[k])!;
+          const path = [...oneWayPath, ...reversed(oneWayPath).slice(1)];
+          const anchorName = waypointSystems[k]!.name;
+
+          bestDetour = {
+            extraLY,
+            mainRouteName: mainRoute.name,
+            insertBetween: [anchorName, anchorName],
+            path: path.map((s) => s.name),
+          };
+        }
+      }
+    }
+
     // j is always i + 1: the main route's own waypoints are stops the
     // freighter is making regardless of this delivery, not optional
     // insertion points to bypass or skip over - even skipping a single one

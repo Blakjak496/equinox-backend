@@ -7,6 +7,7 @@ export type RouteCostResult = {
     mainRouteName?: string;
     insertBetween?: [string, string];
     extraDistanceLY?: number;
+    path?: string[];
     directRoundTripLY?: number;
   };
 };

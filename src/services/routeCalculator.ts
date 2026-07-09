@@ -30,6 +30,14 @@ function legDistance(leg: JumpPathResult): number | null {
   return "error" in leg ? null : leg.totalDistanceLY;
 }
 
+function legPath(leg: JumpPathResult): ISystem[] | null {
+  return "error" in leg ? null : leg.path;
+}
+
+function reversed(path: ISystem[]): ISystem[] {
+  return [...path].reverse();
+}
+
 export async function calculateOptimalRoute(
   pickup: ISystem,
   dropoff: ISystem,
@@ -53,6 +61,7 @@ export async function calculateOptimalRoute(
     extraLY: number;
     mainRouteName: string;
     insertBetween: [string, string];
+    path: string[];
   } | null = null;
 
   for (const mainRoute of mainRoutes) {
@@ -113,10 +122,26 @@ export async function calculateOptimalRoute(
         const extraLY = viaDetourLY - spineSegmentLY;
 
         if (!bestDetour || extraLY < bestDetour.extraLY) {
+          // Ordering one: wi -> pickup -> dropoff -> wj
+          // Ordering two: wi -> dropoff -> pickup -> wj
+          const path =
+            orderingOneLY <= orderingTwoLY
+              ? [
+                  ...legPath(toPickup[i])!,
+                  ...directLeg.path.slice(1),
+                  ...reversed(legPath(toDropoff[j])!).slice(1),
+                ]
+              : [
+                  ...legPath(toDropoff[i])!,
+                  ...reversed(directLeg.path).slice(1),
+                  ...reversed(legPath(toPickup[j])!).slice(1),
+                ];
+
           bestDetour = {
             extraLY,
             mainRouteName: mainRoute.name,
             insertBetween: [wi.name, wj.name],
+            path: path.map((s) => s.name),
           };
         }
       }
@@ -146,6 +171,7 @@ export async function calculateOptimalRoute(
         mainRouteName: bestDetour.mainRouteName,
         insertBetween: bestDetour.insertBetween,
         extraDistanceLY: bestDetour.extraLY,
+        path: bestDetour.path,
       },
     };
   }

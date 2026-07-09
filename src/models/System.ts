@@ -17,7 +17,7 @@ export interface ISystem extends Document {
 const SystemSchema = new Schema<ISystem>(
   {
     systemId: { type: Number, required: true, unique: true },
-    name: { type: String, required: true },
+    name: { type: String, required: true, index: true },
     position: {
       type: new Schema<IPosition>(
         {

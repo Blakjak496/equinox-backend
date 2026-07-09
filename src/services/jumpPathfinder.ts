@@ -1,6 +1,6 @@
 import { ISystem } from "../models/System";
 import { getCachedSystems } from "../lib/systemCache";
-import { distanceLY } from "../utils/distance-utils";
+import { distanceLY, METERS_PER_LY, Position } from "../utils/distance-utils";
 
 const HIGH_SEC_THRESHOLD = 0.5;
 
@@ -12,6 +12,111 @@ function isHighSec(system: ISystem): boolean {
   return (
     system.securityStatus !== null && system.securityStatus >= HIGH_SEC_THRESHOLD
   );
+}
+
+// Simple binary min-heap keyed by distance. Uses lazy deletion (stale
+// entries left behind by a better distance found later are just skipped
+// when popped) rather than a decrease-key operation, which is the
+// standard, simplest way to implement a Dijkstra priority queue.
+class MinHeap {
+  private items: { systemId: number; dist: number }[] = [];
+
+  push(systemId: number, dist: number): void {
+    this.items.push({ systemId, dist });
+    let index = this.items.length - 1;
+    while (index > 0) {
+      const parent = (index - 1) >> 1;
+      if (this.items[parent].dist <= this.items[index].dist) break;
+      [this.items[parent], this.items[index]] = [
+        this.items[index],
+        this.items[parent],
+      ];
+      index = parent;
+    }
+  }
+
+  pop(): { systemId: number; dist: number } | undefined {
+    const top = this.items[0];
+    const last = this.items.pop();
+    if (this.items.length > 0 && last) {
+      this.items[0] = last;
+      let index = 0;
+      const length = this.items.length;
+      while (true) {
+        const left = index * 2 + 1;
+        const right = index * 2 + 2;
+        let smallest = index;
+        if (left < length && this.items[left].dist < this.items[smallest].dist) {
+          smallest = left;
+        }
+        if (
+          right < length &&
+          this.items[right].dist < this.items[smallest].dist
+        ) {
+          smallest = right;
+        }
+        if (smallest === index) break;
+        [this.items[smallest], this.items[index]] = [
+          this.items[index],
+          this.items[smallest],
+        ];
+        index = smallest;
+      }
+    }
+    return top;
+  }
+
+  get size(): number {
+    return this.items.length;
+  }
+}
+
+// Uniform grid keyed by cell coordinates (cell size == jump range), so a
+// neighbor search only has to look at the 3x3x3 block of cells around a
+// system instead of every system in the graph. Since two points within
+// `jumpRangeLY` of each other can never have cell indices differing by
+// more than 1 on any axis, that 3x3x3 block is always sufficient.
+function cellKey(position: Position, cellSizeMeters: number): string {
+  const cx = Math.floor(position.x / cellSizeMeters);
+  const cy = Math.floor(position.y / cellSizeMeters);
+  const cz = Math.floor(position.z / cellSizeMeters);
+  return `${cx},${cy},${cz}`;
+}
+
+function buildSpatialGrid(
+  systems: ISystem[],
+  cellSizeMeters: number,
+): Map<string, ISystem[]> {
+  const grid = new Map<string, ISystem[]>();
+  for (const system of systems) {
+    if (!system.position) continue;
+    const key = cellKey(system.position, cellSizeMeters);
+    const bucket = grid.get(key);
+    if (bucket) bucket.push(system);
+    else grid.set(key, [system]);
+  }
+  return grid;
+}
+
+function nearbySystems(
+  position: Position,
+  grid: Map<string, ISystem[]>,
+  cellSizeMeters: number,
+): ISystem[] {
+  const cx = Math.floor(position.x / cellSizeMeters);
+  const cy = Math.floor(position.y / cellSizeMeters);
+  const cz = Math.floor(position.z / cellSizeMeters);
+
+  const candidates: ISystem[] = [];
+  for (let dx = -1; dx <= 1; dx++) {
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dz = -1; dz <= 1; dz++) {
+        const bucket = grid.get(`${cx + dx},${cy + dy},${cz + dz}`);
+        if (bucket) candidates.push(...bucket);
+      }
+    }
+  }
+  return candidates;
 }
 
 export function findJumpPath(
@@ -39,47 +144,47 @@ export function findJumpPath(
     (s) => s.position && (!isHighSec(s) || s.systemId === start.systemId),
   );
 
-  if (isHighSec(start)) {
-    const hasEscapeRoute = nodes.some(
-      (s) =>
-        s.systemId !== start.systemId &&
-        distanceLY(start.position!, s.position!) <= jumpRangeLY,
+  const cellSizeMeters = jumpRangeLY * METERS_PER_LY;
+  const grid = buildSpatialGrid(nodes, cellSizeMeters);
+
+  const neighborsOf = (system: ISystem): ISystem[] =>
+    nearbySystems(system.position!, grid, cellSizeMeters).filter(
+      (candidate) =>
+        candidate.systemId !== system.systemId &&
+        distanceLY(system.position!, candidate.position!) <= jumpRangeLY,
     );
-    if (!hasEscapeRoute) {
+
+  if (isHighSec(start)) {
+    if (neighborsOf(start).length === 0) {
       return { error: "A jump route can't start in high-sec." };
     }
   }
 
-  const dist = new Map<number, number>(nodes.map((n) => [n.systemId, Infinity]));
+  const dist = new Map<number, number>();
   const prev = new Map<number, number>();
   const visited = new Set<number>();
+  const queue = new MinHeap();
+
   dist.set(start.systemId, 0);
+  queue.push(start.systemId, 0);
 
-  for (let i = 0; i < nodes.length; i++) {
-    let current: ISystem | null = null;
-    let currentDist = Infinity;
-
-    for (const node of nodes) {
-      if (visited.has(node.systemId)) continue;
-      const d = dist.get(node.systemId)!;
-      if (d < currentDist) {
-        currentDist = d;
-        current = node;
-      }
-    }
-
-    if (!current || current.systemId === end.systemId) break;
+  while (queue.size > 0) {
+    const current = queue.pop()!;
+    if (visited.has(current.systemId)) continue;
+    if (current.systemId === end.systemId) break;
     visited.add(current.systemId);
 
-    for (const neighbor of nodes) {
+    const currentSystem = byId.get(current.systemId)!;
+    for (const neighbor of neighborsOf(currentSystem)) {
       if (visited.has(neighbor.systemId)) continue;
-      const d = distanceLY(current.position!, neighbor.position!);
-      if (d > jumpRangeLY) continue;
 
-      const alt = currentDist + d;
-      if (alt < dist.get(neighbor.systemId)!) {
+      const d = distanceLY(currentSystem.position!, neighbor.position!);
+      const alt = current.dist + d;
+
+      if (alt < (dist.get(neighbor.systemId) ?? Infinity)) {
         dist.set(neighbor.systemId, alt);
         prev.set(neighbor.systemId, current.systemId);
+        queue.push(neighbor.systemId, alt);
       }
     }
   }

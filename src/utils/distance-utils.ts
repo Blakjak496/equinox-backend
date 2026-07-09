@@ -1,4 +1,4 @@
-const METERS_PER_LY = 9.4607e15;
+export const METERS_PER_LY = 9.4607e15;
 
 export type Position = { x: number; y: number; z: number };
 

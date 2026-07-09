@@ -141,6 +141,31 @@ adminRouter.get("/stats", async (req, res) => {
   }
 });
 
+adminRouter.get("/systems/search", async (req, res) => {
+  const q = req.query.q as string | undefined;
+
+  if (!q || q.length < 2) {
+    res.status(200).json({ ok: true, data: [] });
+    return;
+  }
+
+  try {
+    const escaped = q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const systems = await System.find({
+      name: { $regex: `^${escaped}`, $options: "i" },
+    })
+      .select("systemId name")
+      .limit(20);
+
+    res.status(200).json({ ok: true, data: systems });
+  } catch (err) {
+    console.error("Failed to search systems:", err);
+    res
+      .status(500)
+      .json({ ok: false, message: "Failed to search systems", error: err });
+  }
+});
+
 adminRouter.get("/systems/resolve", async (req, res) => {
   const name = req.query.name as string | undefined;
 

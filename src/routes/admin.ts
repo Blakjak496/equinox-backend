@@ -214,38 +214,6 @@ adminRouter.get("/systems/:systemId", async (req, res) => {
   }
 });
 
-adminRouter.patch("/systems/:systemId", async (req, res) => {
-  const systemId = Number(req.params.systemId);
-  const { hasTetherableStructure } = req.body;
-
-  if (typeof hasTetherableStructure !== "boolean") {
-    res
-      .status(400)
-      .json({ ok: false, message: "hasTetherableStructure must be a boolean" });
-    return;
-  }
-
-  try {
-    const system = await System.findOneAndUpdate(
-      { systemId },
-      { hasTetherableStructure },
-      { new: true },
-    );
-
-    if (!system) {
-      res.status(404).json({ ok: false, message: "System not found" });
-      return;
-    }
-
-    res.status(200).json({ ok: true, data: system });
-  } catch (err) {
-    console.error("Failed to update system:", err);
-    res
-      .status(500)
-      .json({ ok: false, message: "Failed to update system", error: err });
-  }
-});
-
 adminRouter.post("/routes/calculate", async (req, res) => {
   const { pickupSystemName, dropoffSystemName, shipCategoryId } = req.body;
 

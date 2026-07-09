@@ -1,8 +1,7 @@
 import { ISystem } from "../models/System";
 import { getCachedSystems } from "../lib/systemCache";
 import { distanceLY, METERS_PER_LY, Position } from "../utils/distance-utils";
-
-const HIGH_SEC_THRESHOLD = 0.5;
+import { isHighSec as isHighSecStatus } from "../utils/security-utils";
 
 // Pochven is its own isolated pocket, not connected to the rest of New Eden
 // by stargates or reachable by jump drive in either direction - the only
@@ -15,9 +14,7 @@ export type JumpPathResult =
   | { error: string };
 
 function isHighSec(system: ISystem): boolean {
-  return (
-    system.securityStatus !== null && system.securityStatus >= HIGH_SEC_THRESHOLD
-  );
+  return isHighSecStatus(system.securityStatus);
 }
 
 function isPochven(system: ISystem): boolean {

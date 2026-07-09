@@ -4,15 +4,12 @@ import { ensureSystemIsCached } from "../utils/system-utils";
 import { getConfig } from "../lib/config";
 import { RouteCostResult } from "../types/types";
 import { distanceLY } from "../utils/distance-utils";
+import { isNullSec } from "../utils/security-utils";
 import { findJumpPath, JumpPathResult } from "./jumpPathfinder";
 
 const ISOTOPES_PER_LY = 3000;
 const MIN_CONTRACT_BASE = 5_000_000;
 const PRICE_PER_M3_PER_LY = 24.85;
-// EVE's actual lowsec/nullsec boundary. Not specified numerically in the
-// brief, so this is an assumption — override here if a different cutoff
-// is intended for the collateral-fee rule.
-const LOW_SEC_THRESHOLD = 0.5;
 
 function fuelCostPerLY(): number {
   return ISOTOPES_PER_LY * getConfig().isotopePrice;
@@ -154,13 +151,13 @@ export async function calculateOptimalRoute(
 
   const pricePerM3 = directOneWayLY * PRICE_PER_M3_PER_LY;
 
+  // Collateral is suggested whenever either end touches high-sec or
+  // low-sec - only a delivery entirely within null-sec (our own established
+  // network) is considered safe enough to skip it. Whether a system has a
+  // tetherable structure doesn't tell you the pickup/dropoff is actually
+  // inside it, so it isn't a factor here.
   const suggestChargeCollateral = !(
-    pickup.securityStatus !== null &&
-    pickup.securityStatus <= LOW_SEC_THRESHOLD &&
-    pickup.hasTetherableStructure &&
-    dropoff.securityStatus !== null &&
-    dropoff.securityStatus <= LOW_SEC_THRESHOLD &&
-    dropoff.hasTetherableStructure
+    isNullSec(pickup.securityStatus) && isNullSec(dropoff.securityStatus)
   );
 
   const detourWins =

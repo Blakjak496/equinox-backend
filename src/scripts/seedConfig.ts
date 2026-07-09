@@ -6,6 +6,7 @@ dotenv.config();
 
 const ConfigInput = {
   maxCollateral: 15_000_000_000,
+  isotopePrice: 650,
 };
 
 async function seed() {

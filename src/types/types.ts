@@ -1,3 +1,16 @@
+export type RouteCostResult = {
+  mode: "detour" | "direct";
+  pricePerM3: number;
+  minimum: number;
+  suggestChargeCollateral: boolean;
+  detail: {
+    mainRouteName?: string;
+    insertBetween?: [string, string];
+    extraDistanceLY?: number;
+    directRoundTripLY?: number;
+  };
+};
+
 export type EsiCorpContract = {
   acceptor_id: number;
   assignee_id: number;

@@ -1,5 +1,5 @@
 import { ISystem, System } from "../models/System";
-import { fetchJson } from "./general-utils";
+import { fetchJson, postJson } from "./general-utils";
 
 export async function ensureSystemIsCached(
   systemId: number,
@@ -36,31 +36,19 @@ export async function ensureSystemIsCached(
   return solarSystem;
 }
 
-export async function resolveSystemNameToId(
-  name: string,
-): Promise<number | null> {
-  const res = await fetch(
-    "https://esi.evetech.net/latest/universe/ids/?datasource=tranquility",
-    {
-      method: "POST",
-      headers: {
-        Accept: "application/json",
-        "Content-Type": "application/json",
-        "User-Agent": "EquinoxGalactic Admin (system name resolve)",
-      },
-      body: JSON.stringify([name]),
-    },
-  );
+export async function getSystemIdByName(name: string): Promise<number | null> {
+  const url = "https://esi.evetech.net/latest/universe/ids/?datasource=tranquility";
+  const idsResponse = await postJson<{
+    systems?: { id: number; name: string }[];
+  }>(url, "EquinoxGalactic Admin (system name lookup)", [name]);
 
-  if (!res.ok) {
-    throw new Error(`ESI name resolve failed ${res.status}: ${await res.text()}`);
+  if (!idsResponse.ok || !idsResponse.json) {
+    throw new Error(
+      `ESI name lookup failed ${idsResponse.status}: ${idsResponse.text}`,
+    );
   }
 
-  const json = (await res.json()) as {
-    systems?: { id: number; name: string }[];
-  };
-
-  const match = json.systems?.find(
+  const match = idsResponse.json.systems?.find(
     (system) => system.name.toLowerCase() === name.toLowerCase(),
   );
 

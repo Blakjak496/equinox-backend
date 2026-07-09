@@ -56,6 +56,33 @@ export async function fetchJson<T>(
   return { status: res.status, ok: res.ok, text, json, headers: res.headers };
 }
 
+export async function postJson<T>(
+  url: string,
+  userAgent: string,
+  body: unknown,
+): Promise<{
+  status: number;
+  ok: boolean;
+  text: string;
+  json: T | null;
+  headers: Headers;
+}> {
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+      "User-Agent": userAgent,
+    },
+    body: JSON.stringify(body),
+  });
+
+  const text = await res.text();
+  const json = text ? (JSON.parse(text) as T) : null;
+
+  return { status: res.status, ok: res.ok, text, json, headers: res.headers };
+}
+
 export function getEsiLimitInfo(headers: Headers) {
   return {
     remain: parseHeaderNumber(headers.get("x-esi-error-limit-remain")),

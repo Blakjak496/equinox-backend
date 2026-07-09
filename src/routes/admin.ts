@@ -6,7 +6,7 @@ import { System } from "../models/System";
 import { MainRoute } from "../models/MainRoute";
 import {
   ensureSystemIsCached,
-  resolveSystemNameToId,
+  getSystemIdByName,
 } from "../utils/system-utils";
 import { calculateOptimalRoute } from "../services/routeCalculator";
 
@@ -148,7 +148,7 @@ adminRouter.get("/systems/resolve", async (req, res) => {
   }
 
   try {
-    const systemId = await resolveSystemNameToId(name);
+    const systemId = await getSystemIdByName(name);
 
     if (!systemId) {
       res
@@ -232,8 +232,8 @@ adminRouter.post("/routes/calculate", async (req, res) => {
 
   try {
     const [pickupId, dropoffId] = await Promise.all([
-      resolveSystemNameToId(pickupSystemName),
-      resolveSystemNameToId(dropoffSystemName),
+      getSystemIdByName(pickupSystemName),
+      getSystemIdByName(dropoffSystemName),
     ]);
 
     if (!pickupId || !dropoffId) {

@@ -3,8 +3,9 @@ import { IMainRoute } from "../models/MainRoute";
 import { ensureSystemIsCached } from "../utils/system-utils";
 import { getConfig } from "../lib/config";
 import { RouteCostResult } from "../types/types";
+import { distanceLY } from "../utils/distance-utils";
+import { findJumpPath, JumpPathResult } from "./jumpPathfinder";
 
-const METERS_PER_LY = 9.4607e15;
 const ISOTOPES_PER_LY = 3000;
 const MIN_CONTRACT_BASE = 5_000_000;
 const PRICE_PER_M3_PER_LY = 24.85;
@@ -12,15 +13,6 @@ const PRICE_PER_M3_PER_LY = 24.85;
 // brief, so this is an assumption — override here if a different cutoff
 // is intended for the collateral-fee rule.
 const LOW_SEC_THRESHOLD = 0.5;
-
-type Position = { x: number; y: number; z: number };
-
-export function distanceLY(a: Position, b: Position): number {
-  const dx = a.x - b.x;
-  const dy = a.y - b.y;
-  const dz = a.z - b.z;
-  return Math.sqrt(dx * dx + dy * dy + dz * dz) / METERS_PER_LY;
-}
 
 function fuelCostPerLY(): number {
   return ISOTOPES_PER_LY * getConfig().isotopePrice;
@@ -34,16 +26,27 @@ function minimumFromLY(ly: number): number {
   return roundToNearestMillion(ly * fuelCostPerLY()) + MIN_CONTRACT_BASE;
 }
 
+function legDistance(leg: JumpPathResult): number | null {
+  return "error" in leg ? null : leg.totalDistanceLY;
+}
+
 export async function calculateOptimalRoute(
   pickup: ISystem,
   dropoff: ISystem,
   mainRoutes: IMainRoute[],
-): Promise<RouteCostResult> {
+  jumpRangeLY: number,
+): Promise<RouteCostResult | { error: string }> {
   if (!pickup.position || !dropoff.position) {
-    throw new Error("Pickup/dropoff system is missing position data");
+    return { error: "Pickup/dropoff system is missing position data" };
   }
 
-  const directRoundTripLY = 2 * distanceLY(pickup.position, dropoff.position);
+  const directLeg = findJumpPath(pickup.systemId, dropoff.systemId, jumpRangeLY);
+  if ("error" in directLeg) {
+    return { error: directLeg.error };
+  }
+
+  const directOneWayLY = directLeg.totalDistanceLY;
+  const directRoundTripLY = 2 * directOneWayLY;
   const directMinimum = minimumFromLY(directRoundTripLY);
 
   let bestDetour: {
@@ -61,7 +64,22 @@ export async function calculateOptimalRoute(
 
     if (waypointSystems.some((system) => !system?.position)) continue;
 
+    // Distance from every waypoint to pickup/dropoff only needs computing
+    // once per waypoint, not once per (i, j) pair - reused below.
+    const toPickup = waypointSystems.map((w) =>
+      findJumpPath(w!.systemId, pickup.systemId, jumpRangeLY),
+    );
+    const toDropoff = waypointSystems.map((w) =>
+      findJumpPath(w!.systemId, dropoff.systemId, jumpRangeLY),
+    );
+
     for (let i = 0; i < waypointSystems.length; i++) {
+      // j must be strictly greater than i: a detour only exists when the
+      // route genuinely spans two different waypoints (a segment the
+      // freighter is already flying). A same-waypoint out-and-back spur
+      // can never be cheaper than the plain direct round trip (by the
+      // triangle inequality it can only tie, when the waypoint sits
+      // exactly on the pickup-dropoff line) - direct already covers it.
       for (let j = i + 1; j < waypointSystems.length; j++) {
         const wi = waypointSystems[i]!;
         const wj = waypointSystems[j]!;
@@ -74,17 +92,24 @@ export async function calculateOptimalRoute(
           );
         }
 
-        const orderingOneLY =
-          distanceLY(wi.position!, pickup.position) +
-          distanceLY(pickup.position, dropoff.position) +
-          distanceLY(dropoff.position, wj.position!);
+        const wiToPickup = legDistance(toPickup[i]);
+        const wiToDropoff = legDistance(toDropoff[i]);
+        const wjToPickup = legDistance(toPickup[j]);
+        const wjToDropoff = legDistance(toDropoff[j]);
 
-        const orderingTwoLY =
-          distanceLY(wi.position!, dropoff.position) +
-          distanceLY(dropoff.position, pickup.position) +
-          distanceLY(pickup.position, wj.position!);
+        let orderingOneLY = Infinity;
+        if (wiToPickup !== null && wjToDropoff !== null) {
+          orderingOneLY = wiToPickup + directOneWayLY + wjToDropoff;
+        }
+
+        let orderingTwoLY = Infinity;
+        if (wiToDropoff !== null && wjToPickup !== null) {
+          orderingTwoLY = wiToDropoff + directOneWayLY + wjToPickup;
+        }
 
         const viaDetourLY = Math.min(orderingOneLY, orderingTwoLY);
+        if (viaDetourLY === Infinity) continue;
+
         const extraLY = viaDetourLY - spineSegmentLY;
 
         if (!bestDetour || extraLY < bestDetour.extraLY) {
@@ -100,8 +125,7 @@ export async function calculateOptimalRoute(
 
   const detourMinimum = bestDetour ? minimumFromLY(bestDetour.extraLY) : null;
 
-  const pricePerM3 =
-    distanceLY(pickup.position, dropoff.position) * PRICE_PER_M3_PER_LY;
+  const pricePerM3 = directOneWayLY * PRICE_PER_M3_PER_LY;
 
   const suggestChargeCollateral = !(
     pickup.securityStatus !== null &&

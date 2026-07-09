@@ -4,6 +4,7 @@ import { connectDB } from "./lib/db";
 import cron from "node-cron";
 import { syncContracts } from "./services/syncContracts";
 import { initConfig } from "./lib/config";
+import { initSystemCache } from "./lib/systemCache";
 import authRouter from "./routes/auth";
 import cors from "cors";
 import { adminAuth } from "./lib/adminAuth";
@@ -37,6 +38,7 @@ async function start() {
   console.log("Connected to MongoDB");
 
   await initConfig();
+  await initSystemCache();
 
   cron.schedule("3,18,33,48 * * * *", () => {
     syncContracts();

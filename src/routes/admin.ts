@@ -4,11 +4,13 @@ import { Route } from "../models/Routes";
 import { Stats } from "../models/Stats";
 import { System } from "../models/System";
 import { MainRoute } from "../models/MainRoute";
+import { ShipCategory } from "../models/ShipCategory";
 import {
   ensureSystemIsCached,
   getSystemIdByName,
 } from "../utils/system-utils";
 import { calculateOptimalRoute } from "../services/routeCalculator";
+import { findJumpPath } from "../services/jumpPathfinder";
 
 const adminRouter = Router();
 
@@ -220,17 +222,24 @@ adminRouter.patch("/systems/:systemId", async (req, res) => {
 });
 
 adminRouter.post("/routes/calculate", async (req, res) => {
-  const { pickupSystemName, dropoffSystemName } = req.body;
+  const { pickupSystemName, dropoffSystemName, shipCategoryId } = req.body;
 
-  if (!pickupSystemName || !dropoffSystemName) {
+  if (!pickupSystemName || !dropoffSystemName || !shipCategoryId) {
     res.status(400).json({
       ok: false,
-      message: "pickupSystemName and dropoffSystemName are required",
+      message:
+        "pickupSystemName, dropoffSystemName and shipCategoryId are required",
     });
     return;
   }
 
   try {
+    const shipCategory = await ShipCategory.findById(shipCategoryId);
+    if (!shipCategory) {
+      res.status(404).json({ ok: false, message: "Ship category not found" });
+      return;
+    }
+
     const [pickupId, dropoffId] = await Promise.all([
       getSystemIdByName(pickupSystemName),
       getSystemIdByName(dropoffSystemName),
@@ -257,7 +266,17 @@ adminRouter.post("/routes/calculate", async (req, res) => {
     }
 
     const mainRoutes = await MainRoute.find({ active: true });
-    const result = await calculateOptimalRoute(pickup, dropoff, mainRoutes);
+    const result = await calculateOptimalRoute(
+      pickup,
+      dropoff,
+      mainRoutes,
+      shipCategory.jumpRangeLY,
+    );
+
+    if ("error" in result) {
+      res.status(400).json({ ok: false, message: result.error });
+      return;
+    }
 
     res.status(200).json({ ok: true, data: result });
   } catch (err) {
@@ -339,6 +358,153 @@ adminRouter.delete("/main-routes/:id", async (req, res) => {
     res
       .status(500)
       .json({ ok: false, message: "Failed to delete main route", error: err });
+  }
+});
+
+adminRouter.get("/ship-categories", async (_req, res) => {
+  try {
+    const shipCategories = await ShipCategory.find();
+    res.status(200).json({ ok: true, data: shipCategories });
+  } catch (err) {
+    console.error("Failed to fetch ship categories:", err);
+    res.status(500).json({
+      ok: false,
+      message: "Failed to fetch ship categories",
+      error: err,
+    });
+  }
+});
+
+adminRouter.post("/ship-categories", async (req, res) => {
+  const { name, jumpRangeLY } = req.body;
+
+  if (!name || typeof jumpRangeLY !== "number") {
+    res.status(400).json({
+      ok: false,
+      message: "name and jumpRangeLY are required",
+    });
+    return;
+  }
+
+  try {
+    const shipCategory = await ShipCategory.create({ name, jumpRangeLY });
+    res.status(200).json({ ok: true, data: shipCategory });
+  } catch (err) {
+    console.error("Failed to create ship category:", err);
+    res.status(500).json({
+      ok: false,
+      message: "Failed to create ship category",
+      error: err,
+    });
+  }
+});
+
+adminRouter.put("/ship-categories/:id", async (req, res) => {
+  const { name, jumpRangeLY } = req.body;
+
+  try {
+    const shipCategory = await ShipCategory.findByIdAndUpdate(
+      req.params.id,
+      { name, jumpRangeLY },
+      { new: true },
+    );
+
+    if (!shipCategory) {
+      res.status(404).json({ ok: false, message: "Ship category not found" });
+      return;
+    }
+
+    res.status(200).json({ ok: true, data: shipCategory });
+  } catch (err) {
+    console.error("Failed to update ship category:", err);
+    res.status(500).json({
+      ok: false,
+      message: "Failed to update ship category",
+      error: err,
+    });
+  }
+});
+
+adminRouter.delete("/ship-categories/:id", async (req, res) => {
+  try {
+    await ShipCategory.findByIdAndDelete(req.params.id);
+    res.status(200).json({ ok: true });
+  } catch (err) {
+    console.error("Failed to delete ship category:", err);
+    res.status(500).json({
+      ok: false,
+      message: "Failed to delete ship category",
+      error: err,
+    });
+  }
+});
+
+adminRouter.post("/jump-routes/plan", async (req, res) => {
+  const { waypointNames, shipCategoryId } = req.body;
+
+  if (!Array.isArray(waypointNames) || waypointNames.length < 2 || !shipCategoryId) {
+    res.status(400).json({
+      ok: false,
+      message: "waypointNames (at least 2) and shipCategoryId are required",
+    });
+    return;
+  }
+
+  try {
+    const shipCategory = await ShipCategory.findById(shipCategoryId);
+    if (!shipCategory) {
+      res.status(404).json({ ok: false, message: "Ship category not found" });
+      return;
+    }
+
+    const systemIds = await Promise.all(
+      waypointNames.map((name: string) => getSystemIdByName(name)),
+    );
+
+    const missingIndex = systemIds.findIndex((id) => !id);
+    if (missingIndex !== -1) {
+      res.status(404).json({
+        ok: false,
+        message: `Could not resolve "${waypointNames[missingIndex]}"`,
+      });
+      return;
+    }
+
+    const systems = await Promise.all(
+      systemIds.map((id) => ensureSystemIsCached(id!)),
+    );
+
+    const fullPath = [systems[0]];
+    let totalDistanceLY = 0;
+
+    for (let i = 0; i < systems.length - 1; i++) {
+      const leg = findJumpPath(
+        systems[i]!.systemId,
+        systems[i + 1]!.systemId,
+        shipCategory.jumpRangeLY,
+      );
+
+      if ("error" in leg) {
+        res.status(400).json({ ok: false, message: leg.error });
+        return;
+      }
+
+      totalDistanceLY += leg.totalDistanceLY;
+      fullPath.push(...leg.path.slice(1));
+    }
+
+    res.status(200).json({
+      ok: true,
+      data: {
+        path: fullPath.map((system) => system!.name),
+        totalDistanceLY,
+      },
+    });
+  } catch (err) {
+    console.error("Failed to plan jump route:", err);
+    res
+      .status(500)
+      .json({ ok: false, message: "Failed to plan jump route", error: err });
   }
 });
 

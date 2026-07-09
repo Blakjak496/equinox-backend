@@ -4,7 +4,7 @@ export type RouteCostOption = {
   minimum: number;
   detail: {
     mainRouteName?: string;
-    extraDistanceLY?: number;
+    distanceLY?: number;
     path?: string[];
     directRoundTripLY?: number;
   };

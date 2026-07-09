@@ -69,7 +69,17 @@ function orderedRideSegment(
 
 type DetourCandidate = {
   mainRouteName: string;
+  // What the customer is billed on: the actual one-way distance their
+  // cargo travels from pickup to dropoff via this route.
   distanceLY: number;
+  // What this delivery actually costs *me* to service - the extra flying
+  // beyond whatever I'd already be doing regardless of this delivery.
+  // Used only to pick the cheapest anchor/insertion and to rank this
+  // candidate against other main routes and against a dedicated direct
+  // trip - never billed to the customer, since a detour's whole appeal is
+  // that it costs me less to fly than a dedicated round trip even though
+  // the customer still pays for the full distance travelled.
+  rankingCostLY: number;
   path: string[];
 };
 
@@ -107,14 +117,6 @@ export async function calculateOptimalRoute(
   // trip, currently being flown at all, etc.). That's a judgment call for
   // the admin, so every route's best option is surfaced rather than
   // silently collapsed into one global "winner."
-  //
-  // Every candidate is billed on the actual one-way distance the cargo
-  // travels from pickup to dropoff via that route - not a round trip (the
-  // freighter isn't making a dedicated trip; it's already going that way
-  // for other reasons) and not some "extra distance only" discount either.
-  // A detour is worth less than a dedicated direct trip because it skips
-  // the return leg, not because the customer is only paying for a sliver
-  // of the journey.
   const detourCandidates: DetourCandidate[] = [];
 
   for (const mainRoute of mainRoutes) {
@@ -145,24 +147,30 @@ export async function calculateOptimalRoute(
 
     if (pickupOnRoute && dropoffOnRoute) {
       // Both stops are already scheduled waypoints on this route - the
-      // freighter flies between them regardless of this delivery. Billed
-      // distance is the route's own sub-segment between the two waypoints,
-      // in whichever order they appear (this route may be flown either
-      // direction).
+      // freighter flies between them regardless of this delivery, so it
+      // costs nothing extra to service (this always wins any comparison).
+      // Billed distance is the route's own sub-segment between the two
+      // waypoints, in whichever order they appear (this route may be
+      // flown either direction).
       const path = orderedRideSegment(waypoints, pickupIndex, dropoffIndex);
 
       bestForThisRoute = {
         distanceLY: rideAlongLY(waypoints, pickupIndex, dropoffIndex),
+        rankingCostLY: 0,
         mainRouteName: mainRoute.name,
         path: path.map((s) => s.name),
       };
     } else if (pickupOnRoute !== dropoffOnRoute) {
       // Exactly one point is already a scheduled waypoint - the freighter
-      // rides the route (already flying that regardless) from that
-      // waypoint to whichever anchor is cheapest to jump off from, then
-      // makes a one-way hop to the off-route point. Billed distance is
-      // that ride-along leg plus the one-way jump, not a round trip -
-      // the cargo only ever travels one way, from pickup to dropoff.
+      // rides the route (already flying that regardless, at no extra cost
+      // to me) from that waypoint to some anchor, then spurs off to the
+      // off-route point and back before resuming the route. The anchor
+      // that's cheapest *for me* is whichever minimises that round-trip
+      // spur alone - the ride-along portion doesn't factor in, since I'm
+      // flying it either way. The customer is billed differently though:
+      // the actual one-way distance their cargo travels (ride + one-way
+      // spur, no return leg, since the cargo isn't in the hold on the way
+      // back).
       const onRouteIndex = pickupOnRoute ? pickupIndex : dropoffIndex;
       const toOffRoutePoint = pickupOnRoute ? toDropoff : toPickup;
 
@@ -170,10 +178,11 @@ export async function calculateOptimalRoute(
         const spurLY = legDistance(toOffRoutePoint[k]);
         if (spurLY === null) continue;
 
-        const distance = rideAlongLY(waypoints, onRouteIndex, k) + spurLY;
+        const rankingCostLY = 2 * spurLY;
 
-        if (!bestForThisRoute || distance < bestForThisRoute.distanceLY) {
+        if (!bestForThisRoute || rankingCostLY < bestForThisRoute.rankingCostLY) {
           const spurPath = legPath(toOffRoutePoint[k])!;
+          const distanceLY = rideAlongLY(waypoints, onRouteIndex, k) + spurLY;
 
           const path = pickupOnRoute
             ? [...orderedRideSegment(waypoints, pickupIndex, k), ...spurPath.slice(1)]
@@ -183,20 +192,24 @@ export async function calculateOptimalRoute(
               ];
 
           bestForThisRoute = {
-            distanceLY: distance,
+            distanceLY,
+            rankingCostLY,
             mainRouteName: mainRoute.name,
             path: path.map((s) => s.name),
           };
         }
       }
     } else {
-      // Neither point is on the route - the cargo's actual journey is just
-      // the direct pickup -> dropoff hop, so that's the billed distance
-      // regardless of where it's inserted. The search below only
-      // determines whether this route can feasibly host the delivery at
-      // all (some gap close enough to reach both ends - j is always i + 1,
-      // the route's own waypoints aren't optional stops to skip over) and
-      // which gap gives the most sensible path to display.
+      // Neither point is on the route - servicing this delivery means
+      // genuinely detouring off the spine to reach both ends before
+      // rejoining it, so what it costs *me* is that detour's overhead
+      // beyond the spine segment it's replacing (j is always i + 1, the
+      // route's own waypoints aren't optional stops to skip over). If no
+      // main route's overhead beats a dedicated round trip, this is really
+      // just a direct delivery in disguise - there's nothing "on the way"
+      // to leverage. The customer's bill, though, is simply the direct
+      // pickup -> dropoff distance regardless of which gap it's slotted
+      // into, since that's the cargo's actual one-way journey.
       let bestInsertion: { overheadLY: number; path: ISystem[] } | null = null;
 
       for (let i = 0; i < waypoints.length - 1; i++) {
@@ -249,6 +262,7 @@ export async function calculateOptimalRoute(
       if (bestInsertion) {
         bestForThisRoute = {
           distanceLY: directOneWayLY,
+          rankingCostLY: bestInsertion.overheadLY,
           mainRouteName: mainRoute.name,
           path: bestInsertion.path.map((s) => s.name),
         };
@@ -269,43 +283,54 @@ export async function calculateOptimalRoute(
     isNullSec(pickup.securityStatus) && isNullSec(dropoff.securityStatus)
   );
 
-  const options: RouteCostOption[] = detourCandidates.map((candidate) => ({
-    mode: "detour",
-    pricePerM3: candidate.distanceLY * PRICE_PER_M3_PER_LY,
-    minimum: minimumFromLY(candidate.distanceLY),
-    detail: {
-      mainRouteName: candidate.mainRouteName,
-      distanceLY: candidate.distanceLY,
-      path: candidate.path,
+  type RankedOption = { rankingCostLY: number; option: RouteCostOption };
+
+  const ranked: RankedOption[] = detourCandidates.map((candidate) => ({
+    rankingCostLY: candidate.rankingCostLY,
+    option: {
+      mode: "detour",
+      pricePerM3: candidate.distanceLY * PRICE_PER_M3_PER_LY,
+      minimum: minimumFromLY(candidate.distanceLY),
+      detail: {
+        mainRouteName: candidate.mainRouteName,
+        distanceLY: candidate.distanceLY,
+        path: candidate.path,
+      },
     },
   }));
 
-  if (directMinimum !== null) {
-    options.push({
-      mode: "direct",
-      pricePerM3: directRoundTripLY! * PRICE_PER_M3_PER_LY,
-      minimum: directMinimum,
-      detail: {
-        directRoundTripLY: directRoundTripLY!,
+  if (directRoundTripLY !== null && directMinimum !== null) {
+    // Direct has no baseline to net out against - the whole round trip is
+    // the extra flying it costs me, same as what the customer is billed.
+    ranked.push({
+      rankingCostLY: directRoundTripLY,
+      option: {
+        mode: "direct",
+        pricePerM3: directRoundTripLY * PRICE_PER_M3_PER_LY,
+        minimum: directMinimum,
+        detail: {
+          directRoundTripLY,
+        },
       },
     });
   }
 
-  if (options.length === 0) {
+  if (ranked.length === 0) {
     return {
       error:
         "No dedicated direct round trip is possible (can't jump back into a high-sec endpoint), and no detour off an active main route is viable.",
     };
   }
 
-  options.sort((a, b) => a.minimum - b.minimum);
+  ranked.sort((a, b) => a.rankingCostLY - b.rankingCostLY);
 
-  // If direct is the cheapest option (or the only one), none of the main
-  // routes are actually cheaper - there's no real choice to make, so just
-  // return it on its own rather than presenting a "choice" of one.
-  if (options[0].mode === "direct") {
-    return { suggestChargeCollateral, options: [options[0]] };
+  // If direct costs me the least to actually fly (or it's the only
+  // option), none of the main routes are genuinely useful for this
+  // delivery - there's no real choice to make, so just return it on its
+  // own rather than presenting a "choice" of one.
+  if (ranked[0].option.mode === "direct") {
+    return { suggestChargeCollateral, options: [ranked[0].option] };
   }
 
-  return { suggestChargeCollateral, options };
+  return { suggestChargeCollateral, options: ranked.map((r) => r.option) };
 }

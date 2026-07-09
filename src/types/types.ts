@@ -1,15 +1,23 @@
-export type RouteCostResult = {
+export type RouteCostOption = {
   mode: "detour" | "direct";
   pricePerM3: number;
   minimum: number;
-  suggestChargeCollateral: boolean;
   detail: {
     mainRouteName?: string;
-    insertBetween?: [string, string];
     extraDistanceLY?: number;
     path?: string[];
     directRoundTripLY?: number;
   };
+};
+
+export type RouteCostResult = {
+  suggestChargeCollateral: boolean;
+  // A single entry means direct beat every main route's best detour (or
+  // there were no viable detours at all) - nothing to choose between.
+  // Multiple entries means at least one detour is cheaper than direct,
+  // and it's a business judgment call which route is actually applicable
+  // right now, not something this calculator can decide on its own.
+  options: RouteCostOption[];
 };
 
 export type EsiCorpContract = {

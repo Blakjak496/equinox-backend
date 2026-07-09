@@ -2,7 +2,7 @@ import { ISystem } from "../models/System";
 import { IMainRoute } from "../models/MainRoute";
 import { ensureSystemIsCached } from "../utils/system-utils";
 import { getConfig } from "../lib/config";
-import { RouteCostResult } from "../types/types";
+import { RouteCostOption, RouteCostResult } from "../types/types";
 import { distanceLY } from "../utils/distance-utils";
 import { isNullSec } from "../utils/security-utils";
 import { findJumpPath, JumpPathResult } from "./jumpPathfinder";
@@ -35,6 +35,12 @@ function reversed(path: ISystem[]): ISystem[] {
   return [...path].reverse();
 }
 
+type DetourCandidate = {
+  mainRouteName: string;
+  extraLY: number;
+  path: string[];
+};
+
 export async function calculateOptimalRoute(
   pickup: ISystem,
   dropoff: ISystem,
@@ -63,12 +69,13 @@ export async function calculateOptimalRoute(
   const directMinimum =
     directRoundTripLY !== null ? minimumFromLY(directRoundTripLY) : null;
 
-  let bestDetour: {
-    extraLY: number;
-    mainRouteName: string;
-    insertBetween: [string, string];
-    path: string[];
-  } | null = null;
+  // Every active main route gets its own best detour, independently - it's
+  // not for this calculator to guess which route is actually applicable
+  // right now (whether it's genuinely bidirectional, part of a split round
+  // trip, currently being flown at all, etc.). That's a judgment call for
+  // the admin, so every route's best option is surfaced rather than
+  // silently collapsed into one global "winner."
+  const detourCandidates: DetourCandidate[] = [];
 
   for (const mainRoute of mainRoutes) {
     if (!mainRoute.active) continue;
@@ -87,6 +94,8 @@ export async function calculateOptimalRoute(
     const toDropoff = waypointSystems.map((w) =>
       findJumpPath(w!.systemId, dropoff.systemId, jumpRangeLY),
     );
+
+    let bestForThisRoute: DetourCandidate | null = null;
 
     // If exactly one of pickup/dropoff already sits on this route, it's
     // reached for free no matter which waypoint anchors the detour - the
@@ -110,15 +119,13 @@ export async function calculateOptimalRoute(
         if (oneWayLY === null) continue;
 
         const extraLY = 2 * oneWayLY;
-        if (!bestDetour || extraLY < bestDetour.extraLY) {
+        if (!bestForThisRoute || extraLY < bestForThisRoute.extraLY) {
           const oneWayPath = legPath(toOffRoutePoint[k])!;
           const path = [...oneWayPath, ...reversed(oneWayPath).slice(1)];
-          const anchorName = waypointSystems[k]!.name;
 
-          bestDetour = {
+          bestForThisRoute = {
             extraLY,
             mainRouteName: mainRoute.name,
-            insertBetween: [anchorName, anchorName],
             path: path.map((s) => s.name),
           };
         }
@@ -158,7 +165,7 @@ export async function calculateOptimalRoute(
 
       const extraLY = viaDetourLY - spineSegmentLY;
 
-      if (!bestDetour || extraLY < bestDetour.extraLY) {
+      if (!bestForThisRoute || extraLY < bestForThisRoute.extraLY) {
         // Ordering one: wi -> pickup -> dropoff -> wj
         // Ordering two: wi -> dropoff -> pickup -> wj
         const path =
@@ -174,17 +181,18 @@ export async function calculateOptimalRoute(
                 ...reversed(legPath(toPickup[j])!).slice(1),
               ];
 
-        bestDetour = {
+        bestForThisRoute = {
           extraLY,
           mainRouteName: mainRoute.name,
-          insertBetween: [wi.name, wj.name],
           path: path.map((s) => s.name),
         };
       }
     }
-  }
 
-  const detourMinimum = bestDetour ? minimumFromLY(bestDetour.extraLY) : null;
+    if (bestForThisRoute) {
+      detourCandidates.push(bestForThisRoute);
+    }
+  }
 
   const pricePerM3 = directOneWayLY * PRICE_PER_M3_PER_LY;
 
@@ -197,40 +205,43 @@ export async function calculateOptimalRoute(
     isNullSec(pickup.securityStatus) && isNullSec(dropoff.securityStatus)
   );
 
-  const detourWins =
-    detourMinimum !== null &&
-    bestDetour &&
-    (directMinimum === null || detourMinimum <= directMinimum);
-
-  if (detourWins) {
-    return {
-      mode: "detour",
-      pricePerM3,
-      minimum: detourMinimum!,
-      suggestChargeCollateral,
-      detail: {
-        mainRouteName: bestDetour!.mainRouteName,
-        insertBetween: bestDetour!.insertBetween,
-        extraDistanceLY: bestDetour!.extraLY,
-        path: bestDetour!.path,
-      },
-    };
-  }
+  const options: RouteCostOption[] = detourCandidates.map((candidate) => ({
+    mode: "detour",
+    pricePerM3,
+    minimum: minimumFromLY(candidate.extraLY),
+    detail: {
+      mainRouteName: candidate.mainRouteName,
+      extraDistanceLY: candidate.extraLY,
+      path: candidate.path,
+    },
+  }));
 
   if (directMinimum !== null) {
-    return {
+    options.push({
       mode: "direct",
       pricePerM3,
       minimum: directMinimum,
-      suggestChargeCollateral,
       detail: {
         directRoundTripLY: directRoundTripLY!,
       },
+    });
+  }
+
+  if (options.length === 0) {
+    return {
+      error:
+        "No dedicated direct round trip is possible (can't jump back into a high-sec endpoint), and no detour off an active main route is viable.",
     };
   }
 
-  return {
-    error:
-      "No dedicated direct round trip is possible (can't jump back into a high-sec endpoint), and no detour off an active main route is cheaper.",
-  };
+  options.sort((a, b) => a.minimum - b.minimum);
+
+  // If direct is the cheapest option (or the only one), none of the main
+  // routes are actually cheaper - there's no real choice to make, so just
+  // return it on its own rather than presenting a "choice" of one.
+  if (options[0].mode === "direct") {
+    return { suggestChargeCollateral, options: [options[0]] };
+  }
+
+  return { suggestChargeCollateral, options };
 }

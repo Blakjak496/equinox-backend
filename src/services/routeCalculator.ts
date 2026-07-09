@@ -54,8 +54,17 @@ export async function calculateOptimalRoute(
   }
 
   const directOneWayLY = directLeg.totalDistanceLY;
-  const directRoundTripLY = 2 * directOneWayLY;
-  const directMinimum = minimumFromLY(directRoundTripLY);
+
+  // A dedicated direct trip is a genuine round trip (there's no other
+  // reason to make it), so the return leg has to be independently valid -
+  // jump travel isn't symmetric wherever high-sec is involved (you can
+  // jump out of high-sec but never back in), so it can't just be assumed
+  // to cost the same as the outbound leg.
+  const returnLeg = findJumpPath(dropoff.systemId, pickup.systemId, jumpRangeLY);
+  const directRoundTripLY =
+    "error" in returnLeg ? null : directOneWayLY + returnLeg.totalDistanceLY;
+  const directMinimum =
+    directRoundTripLY !== null ? minimumFromLY(directRoundTripLY) : null;
 
   let bestDetour: {
     extraLY: number;
@@ -82,72 +91,61 @@ export async function calculateOptimalRoute(
       findJumpPath(w!.systemId, dropoff.systemId, jumpRangeLY),
     );
 
-    // j is capped at i + 2: the main route's own waypoints are stops the
+    // j is always i + 1: the main route's own waypoints are stops the
     // freighter is making regardless of this delivery, not optional
-    // insertion points to bypass. A detour may skip at most one
-    // established waypoint (i, i+2) or insert between two adjacent ones
-    // (i, i+1) - it must never span the whole route and silently drop
-    // waypoints that still need visiting, which is just a different
-    // route, not a detour off this one.
-    const maxSkip = 2;
+    // insertion points to bypass or skip over - even skipping a single one
+    // would misprice this delivery against the assumption that waypoint is
+    // still being visited, which breaks any other detour anchored there.
+    // A detour may only insert between two immediately adjacent waypoints.
+    for (let i = 0; i < waypointSystems.length - 1; i++) {
+      const j = i + 1;
+      const wi = waypointSystems[i]!;
+      const wj = waypointSystems[j]!;
 
-    for (let i = 0; i < waypointSystems.length; i++) {
-      const maxJ = Math.min(i + maxSkip, waypointSystems.length - 1);
-      for (let j = i + 1; j <= maxJ; j++) {
-        const wi = waypointSystems[i]!;
-        const wj = waypointSystems[j]!;
+      const spineSegmentLY = distanceLY(wi.position!, wj.position!);
 
-        let spineSegmentLY = 0;
-        for (let k = i; k < j; k++) {
-          spineSegmentLY += distanceLY(
-            waypointSystems[k]!.position!,
-            waypointSystems[k + 1]!.position!,
-          );
-        }
+      const wiToPickup = legDistance(toPickup[i]);
+      const wiToDropoff = legDistance(toDropoff[i]);
+      const wjToPickup = legDistance(toPickup[j]);
+      const wjToDropoff = legDistance(toDropoff[j]);
 
-        const wiToPickup = legDistance(toPickup[i]);
-        const wiToDropoff = legDistance(toDropoff[i]);
-        const wjToPickup = legDistance(toPickup[j]);
-        const wjToDropoff = legDistance(toDropoff[j]);
+      let orderingOneLY = Infinity;
+      if (wiToPickup !== null && wjToDropoff !== null) {
+        orderingOneLY = wiToPickup + directOneWayLY + wjToDropoff;
+      }
 
-        let orderingOneLY = Infinity;
-        if (wiToPickup !== null && wjToDropoff !== null) {
-          orderingOneLY = wiToPickup + directOneWayLY + wjToDropoff;
-        }
+      let orderingTwoLY = Infinity;
+      if (wiToDropoff !== null && wjToPickup !== null) {
+        orderingTwoLY = wiToDropoff + directOneWayLY + wjToPickup;
+      }
 
-        let orderingTwoLY = Infinity;
-        if (wiToDropoff !== null && wjToPickup !== null) {
-          orderingTwoLY = wiToDropoff + directOneWayLY + wjToPickup;
-        }
+      const viaDetourLY = Math.min(orderingOneLY, orderingTwoLY);
+      if (viaDetourLY === Infinity) continue;
 
-        const viaDetourLY = Math.min(orderingOneLY, orderingTwoLY);
-        if (viaDetourLY === Infinity) continue;
+      const extraLY = viaDetourLY - spineSegmentLY;
 
-        const extraLY = viaDetourLY - spineSegmentLY;
+      if (!bestDetour || extraLY < bestDetour.extraLY) {
+        // Ordering one: wi -> pickup -> dropoff -> wj
+        // Ordering two: wi -> dropoff -> pickup -> wj
+        const path =
+          orderingOneLY <= orderingTwoLY
+            ? [
+                ...legPath(toPickup[i])!,
+                ...directLeg.path.slice(1),
+                ...reversed(legPath(toDropoff[j])!).slice(1),
+              ]
+            : [
+                ...legPath(toDropoff[i])!,
+                ...reversed(directLeg.path).slice(1),
+                ...reversed(legPath(toPickup[j])!).slice(1),
+              ];
 
-        if (!bestDetour || extraLY < bestDetour.extraLY) {
-          // Ordering one: wi -> pickup -> dropoff -> wj
-          // Ordering two: wi -> dropoff -> pickup -> wj
-          const path =
-            orderingOneLY <= orderingTwoLY
-              ? [
-                  ...legPath(toPickup[i])!,
-                  ...directLeg.path.slice(1),
-                  ...reversed(legPath(toDropoff[j])!).slice(1),
-                ]
-              : [
-                  ...legPath(toDropoff[i])!,
-                  ...reversed(directLeg.path).slice(1),
-                  ...reversed(legPath(toPickup[j])!).slice(1),
-                ];
-
-          bestDetour = {
-            extraLY,
-            mainRouteName: mainRoute.name,
-            insertBetween: [wi.name, wj.name],
-            path: path.map((s) => s.name),
-          };
-        }
+        bestDetour = {
+          extraLY,
+          mainRouteName: mainRoute.name,
+          insertBetween: [wi.name, wj.name],
+          path: path.map((s) => s.name),
+        };
       }
     }
   }
@@ -165,28 +163,40 @@ export async function calculateOptimalRoute(
     dropoff.hasTetherableStructure
   );
 
-  if (detourMinimum !== null && bestDetour && detourMinimum <= directMinimum) {
+  const detourWins =
+    detourMinimum !== null &&
+    bestDetour &&
+    (directMinimum === null || detourMinimum <= directMinimum);
+
+  if (detourWins) {
     return {
       mode: "detour",
       pricePerM3,
-      minimum: detourMinimum,
+      minimum: detourMinimum!,
       suggestChargeCollateral,
       detail: {
-        mainRouteName: bestDetour.mainRouteName,
-        insertBetween: bestDetour.insertBetween,
-        extraDistanceLY: bestDetour.extraLY,
-        path: bestDetour.path,
+        mainRouteName: bestDetour!.mainRouteName,
+        insertBetween: bestDetour!.insertBetween,
+        extraDistanceLY: bestDetour!.extraLY,
+        path: bestDetour!.path,
+      },
+    };
+  }
+
+  if (directMinimum !== null) {
+    return {
+      mode: "direct",
+      pricePerM3,
+      minimum: directMinimum,
+      suggestChargeCollateral,
+      detail: {
+        directRoundTripLY: directRoundTripLY!,
       },
     };
   }
 
   return {
-    mode: "direct",
-    pricePerM3,
-    minimum: directMinimum,
-    suggestChargeCollateral,
-    detail: {
-      directRoundTripLY,
-    },
+    error:
+      "No dedicated direct round trip is possible (can't jump back into a high-sec endpoint), and no detour off an active main route is cheaper.",
   };
 }

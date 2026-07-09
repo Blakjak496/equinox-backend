@@ -134,6 +134,12 @@ export function findJumpPath(
     return { error: "Start or end system is missing position data" };
   }
 
+  // Already there - no jump needed, so the high-sec landing rule doesn't
+  // apply (nothing is being landed *into*).
+  if (start.systemId === end.systemId) {
+    return { path: [start], totalDistanceLY: 0 };
+  }
+
   if (isHighSec(end)) {
     return { error: "A jump route can't end in high-sec." };
   }

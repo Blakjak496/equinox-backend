@@ -82,14 +82,18 @@ export async function calculateOptimalRoute(
       findJumpPath(w!.systemId, dropoff.systemId, jumpRangeLY),
     );
 
+    // j is capped at i + 2: the main route's own waypoints are stops the
+    // freighter is making regardless of this delivery, not optional
+    // insertion points to bypass. A detour may skip at most one
+    // established waypoint (i, i+2) or insert between two adjacent ones
+    // (i, i+1) - it must never span the whole route and silently drop
+    // waypoints that still need visiting, which is just a different
+    // route, not a detour off this one.
+    const maxSkip = 2;
+
     for (let i = 0; i < waypointSystems.length; i++) {
-      // j must be strictly greater than i: a detour only exists when the
-      // route genuinely spans two different waypoints (a segment the
-      // freighter is already flying). A same-waypoint out-and-back spur
-      // can never be cheaper than the plain direct round trip (by the
-      // triangle inequality it can only tie, when the waypoint sits
-      // exactly on the pickup-dropoff line) - direct already covers it.
-      for (let j = i + 1; j < waypointSystems.length; j++) {
+      const maxJ = Math.min(i + maxSkip, waypointSystems.length - 1);
+      for (let j = i + 1; j <= maxJ; j++) {
         const wi = waypointSystems[i]!;
         const wj = waypointSystems[j]!;
 

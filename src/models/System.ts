@@ -11,6 +11,7 @@ export interface ISystem extends Document {
   name: string;
   position: IPosition | null;
   securityStatus: number | null;
+  regionId: number | null;
   hasTetherableStructure: boolean;
 }
 
@@ -30,6 +31,7 @@ const SystemSchema = new Schema<ISystem>(
       default: null,
     },
     securityStatus: { type: Number, default: null },
+    regionId: { type: Number, default: null },
     hasTetherableStructure: { type: Boolean, required: true, default: false },
   },
   { timestamps: true },

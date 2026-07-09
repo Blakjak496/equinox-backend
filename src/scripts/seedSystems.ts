@@ -11,6 +11,7 @@ const SDE_URL =
 type SdeRow = {
   solarSystemID: string;
   solarSystemName: string;
+  regionID: string;
   x: string;
   y: string;
   z: string;
@@ -51,6 +52,7 @@ async function seed() {
             z: Number(row.z),
           },
           securityStatus: Number(row.security),
+          regionId: Number(row.regionID),
         },
       },
       upsert: true,

@@ -4,6 +4,12 @@ import { distanceLY, METERS_PER_LY, Position } from "../utils/distance-utils";
 
 const HIGH_SEC_THRESHOLD = 0.5;
 
+// Pochven is its own isolated pocket, not connected to the rest of New Eden
+// by stargates or reachable by jump drive in either direction - the only
+// way in or out is a filament or the Zarzakh connection. Distance alone
+// (even within jump range) never makes a Pochven system a valid hop.
+const POCHVEN_REGION_ID = 10000070;
+
 export type JumpPathResult =
   | { path: ISystem[]; totalDistanceLY: number }
   | { error: string };
@@ -12,6 +18,10 @@ function isHighSec(system: ISystem): boolean {
   return (
     system.securityStatus !== null && system.securityStatus >= HIGH_SEC_THRESHOLD
   );
+}
+
+function isPochven(system: ISystem): boolean {
+  return system.regionId === POCHVEN_REGION_ID;
 }
 
 // Simple binary min-heap keyed by distance. Uses lazy deletion (stale
@@ -140,14 +150,27 @@ export function findJumpPath(
     return { path: [start], totalDistanceLY: 0 };
   }
 
+  if (isPochven(end)) {
+    return { error: "Pochven can't be reached by jump drive." };
+  }
+  if (isPochven(start)) {
+    return { error: "Pochven can't be left by jump drive." };
+  }
+
   if (isHighSec(end)) {
     return { error: "A jump route can't end in high-sec." };
   }
 
   // Any system can be a starting point, but only non-high-sec systems can
   // be landed in (except the start itself, since you can depart high-sec).
+  // Pochven is excluded unconditionally - unlike high-sec there's no
+  // "you can depart from it" exception, since normal jump-drive travel
+  // doesn't reach it in either direction.
   const nodes = allSystems.filter(
-    (s) => s.position && (!isHighSec(s) || s.systemId === start.systemId),
+    (s) =>
+      s.position &&
+      !isPochven(s) &&
+      (!isHighSec(s) || s.systemId === start.systemId),
   );
 
   const cellSizeMeters = jumpRangeLY * METERS_PER_LY;

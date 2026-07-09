@@ -194,8 +194,6 @@ export async function calculateOptimalRoute(
     }
   }
 
-  const pricePerM3 = directOneWayLY * PRICE_PER_M3_PER_LY;
-
   // Collateral is suggested whenever either end touches high-sec or
   // low-sec - only a delivery entirely within null-sec (our own established
   // network) is considered safe enough to skip it. Whether a system has a
@@ -205,9 +203,13 @@ export async function calculateOptimalRoute(
     isNullSec(pickup.securityStatus) && isNullSec(dropoff.securityStatus)
   );
 
+  // Priced on the same distance each option's minimum is based on - the
+  // marginal extra distance for a detour, the full round trip for a
+  // dedicated direct run - not the raw pickup-to-dropoff distance, which
+  // would ignore how much further (or less) that option actually flies.
   const options: RouteCostOption[] = detourCandidates.map((candidate) => ({
     mode: "detour",
-    pricePerM3,
+    pricePerM3: candidate.extraLY * PRICE_PER_M3_PER_LY,
     minimum: minimumFromLY(candidate.extraLY),
     detail: {
       mainRouteName: candidate.mainRouteName,
@@ -219,7 +221,7 @@ export async function calculateOptimalRoute(
   if (directMinimum !== null) {
     options.push({
       mode: "direct",
-      pricePerM3,
+      pricePerM3: directRoundTripLY! * PRICE_PER_M3_PER_LY,
       minimum: directMinimum,
       detail: {
         directRoundTripLY: directRoundTripLY!,

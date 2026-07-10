@@ -119,6 +119,76 @@ export function buildContractNotificationPayload(
   };
 }
 
+export function buildBuybackContractNotificationPayload(
+  contractId: number,
+  price: number,
+  status: string | null,
+  pickupLocation: string | null,
+  acceptedByName: string,
+  buybackQuoteId: string | null,
+  buybackDiscrepancy: { level: string | null; reasons: string[] } | null,
+) {
+  const level = buybackDiscrepancy?.level ?? null;
+  const color =
+    level === "ok"
+      ? embedColors.green
+      : level === "fail"
+        ? embedColors.red
+        : level === "warning"
+          ? embedColors.yellow
+          : embedColors.grey;
+
+  return {
+    embeds: [
+      {
+        title: "💰 Buyback Contract",
+        color,
+        fields: [
+          {
+            name: "Reference",
+            value: buybackQuoteId ?? "None found in title",
+            inline: false,
+          },
+          {
+            name: "Location",
+            value: pickupLocation ?? "Unknown",
+            inline: true,
+          },
+          {
+            name: "Price",
+            value: `${price.toLocaleString()} ISK`,
+            inline: true,
+          },
+          {
+            name: "Status",
+            value: status || "Unknown",
+            inline: true,
+          },
+          {
+            name: "Match",
+            value:
+              level === "ok"
+                ? "✅ Matches quote"
+                : level
+                  ? `⚠️ ${buybackDiscrepancy?.reasons.join(", ") || "Discrepancy"}`
+                  : "—",
+            inline: true,
+          },
+          {
+            name: "Accepted By",
+            value: acceptedByName || "Unassigned",
+            inline: true,
+          },
+        ],
+        footer: {
+          text: `Contract ID: ${contractId}`,
+        },
+        timestamp: new Date().toISOString(),
+      },
+    ],
+  };
+}
+
 export const parseIskInput = (input: string): number | null => {
   const value = input.trim().toLowerCase();
 

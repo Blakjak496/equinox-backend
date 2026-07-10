@@ -78,6 +78,40 @@ export async function notifyContractUpdate(contract: IContract) {
   if (!json.ok) throw new Error("Failed to update discord message");
 }
 
+export async function notifyNewBuybackContract(
+  contract: IContract,
+): Promise<IContract | null> {
+  const data = {
+    contractId: contract.contractId,
+    price: contract.price ?? 0,
+    status: contract.status,
+    pickupLocation: contract.pickupStructure?.name ?? null,
+    acceptedByName: contract.acceptedByName,
+    buybackQuoteId: contract.buybackQuoteId,
+    buybackDiscrepancy: contract.buybackDiscrepancy,
+  };
+
+  const res = await fetch(
+    `http://localhost:${process.env.BOT_PORT}/notify/buyback-contract`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    },
+  );
+
+  const text = await res.text();
+  const json = JSON.parse(text) as { ok: boolean; messageId: string };
+
+  if (!json.ok) throw new Error("Failed to ping new buyback contract");
+
+  return Contract.findOneAndUpdate(
+    { contractId: contract.contractId },
+    { discordMessageId: json.messageId },
+    { new: true },
+  );
+}
+
 export async function pingOverdue(
   contractId: number,
   discordMessageId: string | null,

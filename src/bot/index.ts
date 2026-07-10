@@ -9,7 +9,10 @@ import {
   TextChannel,
 } from "discord.js";
 import { connectDB } from "../lib/db";
-import { buildContractNotificationPayload } from "../utils/discord-utils";
+import {
+  buildContractNotificationPayload,
+  buildBuybackContractNotificationPayload,
+} from "../utils/discord-utils";
 import {
   handleAppraisalModalSubmit,
   openAppraisalModal,
@@ -133,6 +136,34 @@ app.patch("/notify/contract", async (req, res) => {
   });
 
   res.json({ ok: true });
+});
+
+app.post("/notify/buyback-contract", async (req, res) => {
+  const data = { ...req.body };
+  const discordChannelId = process.env.DISCORD_BUYBACK_CHANNEL_ID;
+
+  if (!discordChannelId)
+    throw new Error(
+      "DISCORD_BUYBACK_CHANNEL_ID not set - unable to send buyback contract notification",
+    );
+
+  const channel = (await client.channels.fetch(
+    discordChannelId,
+  )) as TextChannel;
+
+  const payload = buildBuybackContractNotificationPayload(
+    data.contractId,
+    data.price,
+    data.status,
+    data.pickupLocation,
+    data.acceptedByName,
+    data.buybackQuoteId,
+    data.buybackDiscrepancy,
+  );
+
+  const message = await channel.send({ embeds: payload.embeds });
+
+  res.json({ ok: true, messageId: message.id });
 });
 
 app.post("/notify/contract/ping", async (req, res) => {

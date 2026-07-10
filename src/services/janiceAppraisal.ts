@@ -1,7 +1,8 @@
 import { JaniceAppraisal } from "../types/types";
 
-const JANICE_URL =
-  "https://janice.e-351.com/api/rest/v2/appraisal?market=2&pricing=sell&pricingVariant=immediate";
+function buildJaniceAppraisalUrl(pricing: "buy" | "sell"): string {
+  return `https://janice.e-351.com/api/rest/v2/appraisal?market=2&pricing=${pricing}&pricingVariant=immediate`;
+}
 
 function getApiKey(): string {
   const apiKey = process.env.JANICE_API_KEY;
@@ -11,11 +12,12 @@ function getApiKey(): string {
 
 export async function runJaniceAppraisal(
   itemsText: string,
+  pricing: "buy" | "sell" = "sell",
 ): Promise<JaniceAppraisal> {
   const trimmed = itemsText.trim();
   if (!trimmed) throw new Error("itemsText is required");
 
-  const res = await fetch(JANICE_URL, {
+  const res = await fetch(buildJaniceAppraisalUrl(pricing), {
     method: "POST",
     headers: {
       "Content-Type": "text/plain",

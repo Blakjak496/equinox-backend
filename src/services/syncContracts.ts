@@ -15,8 +15,10 @@ import { getOrFetchStructure } from "../utils/structure-utils";
 import {
   notifyContractUpdate,
   notifyNewContract,
+  notifyNewBuybackContract,
   pingOverdue,
 } from "./discordNotify";
+import { matchBuybackContract } from "./buybackContractMatch";
 
 let syncRunning: boolean = false;
 
@@ -84,6 +86,13 @@ export async function syncContracts(): Promise<void> {
     const courierContracts = allContracts.filter((contract) => {
       return (
         contract.type === "courier" && contract.assignee_id === corporationId
+      );
+    });
+
+    const itemExchangeContracts = allContracts.filter((contract) => {
+      return (
+        contract.type === "item_exchange" &&
+        contract.assignee_id === corporationId
       );
     });
 
@@ -322,6 +331,115 @@ export async function syncContracts(): Promise<void> {
           }
         }
       }
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+    }
+
+    const existingItemExchangeContracts = await Contract.find({
+      contractId: {
+        $in: itemExchangeContracts.map((contract) => contract.contract_id),
+      },
+    });
+
+    for (const esiContract of itemExchangeContracts) {
+      const existingContract = existingItemExchangeContracts.find(
+        (contract) => Number(contract.contractId) === esiContract.contract_id,
+      );
+
+      const isNewContract = !existingContract;
+      const statusChanged =
+        !isNewContract && esiContract.status !== existingContract.status;
+
+      if (!isNewContract && !statusChanged) continue;
+
+      const pickupStructure = esiBudgetLow
+        ? null
+        : await getOrFetchStructure(esiContract.start_location_id, token);
+
+      const discordChannelType =
+        pickupStructure?.systemName?.toLowerCase().includes("jita") ?? false
+          ? "jita"
+          : "default";
+
+      let buybackQuoteId: string | null = null;
+      let buybackDiscrepancy: IContractValidation | null = null;
+      try {
+        const match = await matchBuybackContract(
+          esiContract,
+          corporationId,
+          token,
+        );
+        buybackQuoteId = match.buybackQuoteId;
+        buybackDiscrepancy = match.buybackDiscrepancy;
+      } catch (err) {
+        console.log(
+          "Something went wrong while matching a buyback contract: ",
+          err,
+        );
+        buybackDiscrepancy = {
+          level: "warning",
+          reasons: ["match_error"],
+          message: "Could not verify this contract against a stored quote",
+        };
+      }
+
+      const issuerId = esiContract.issuer_id;
+      const issuerCorpId = esiContract.issuer_corporation_id;
+      const acceptorId = esiContract.acceptor_id;
+
+      // Warms the character/corp caches used elsewhere in the app -
+      // acceptedByName below is the only value from these used directly here.
+      const issuer: ICharacter | null = await getOrFetchCharacter(issuerId);
+      if (issuer && issuer.corporationId !== issuerCorpId)
+        await getOrFetchCharacter(issuer.characterId, true);
+      await getOrFetchCorporation(issuerCorpId);
+
+      let acceptor: ICharacter | ICorporation | null;
+      if (acceptorId) {
+        acceptor = await getOrFetchCharacter(acceptorId);
+        if (!acceptor) acceptor = await getOrFetchCorporation(acceptorId);
+      } else acceptor = null;
+
+      const updatedContract = await Contract.findOneAndUpdate(
+        { contractId: esiContract.contract_id },
+        {
+          contractId: esiContract.contract_id,
+          type: esiContract.type,
+          status: esiContract.status,
+          dateIssued: esiContract.date_issued,
+          dateExpired: esiContract.date_expired,
+          dateAccepted: esiContract.date_accepted,
+          dateCompleted: esiContract.date_completed,
+          title: esiContract.title,
+          volume: esiContract.volume,
+          price: esiContract.price,
+          issuerId: esiContract.issuer_id,
+          issuerCorporationId: esiContract.issuer_corporation_id,
+          assigneeId: esiContract.assignee_id,
+          acceptorId: esiContract.acceptor_id,
+          acceptedByName: acceptor ? acceptor.name : null,
+          availability: esiContract.availability,
+          forCorporation: esiContract.for_corporation,
+          startLocationId: esiContract.start_location_id,
+          endLocationId: esiContract.end_location_id,
+          pickupStructure,
+          discordChannelType,
+          buybackQuoteId,
+          buybackDiscrepancy,
+        },
+        { upsert: true, returnDocument: "after", setDefaultsOnInsert: true },
+      );
+
+      if (isNewContract) {
+        try {
+          await notifyNewBuybackContract(updatedContract);
+        } catch (err) {
+          console.log(
+            "Something went wrong while sending the new buyback contract notification: ",
+            err,
+          );
+        }
+      }
+
       await new Promise((resolve) => setTimeout(resolve, 1500));
     }
   } catch (err) {

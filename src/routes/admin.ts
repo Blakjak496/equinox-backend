@@ -5,6 +5,9 @@ import { Stats } from "../models/Stats";
 import { System } from "../models/System";
 import { MainRoute } from "../models/MainRoute";
 import { ShipCategory } from "../models/ShipCategory";
+import { BuybackCategory } from "../models/BuybackCategory";
+import { BuybackItem } from "../models/BuybackItem";
+import { BuybackQuote } from "../models/BuybackQuote";
 import {
   ensureSystemIsCached,
   getSystemIdByName,
@@ -498,6 +501,129 @@ adminRouter.post("/jump-routes/plan", async (req, res) => {
     res
       .status(500)
       .json({ ok: false, message: "Failed to plan jump route", error: err });
+  }
+});
+
+adminRouter.get("/buyback-categories", async (_req, res) => {
+  try {
+    const categories = await BuybackCategory.find().sort({ name: 1 });
+    res.status(200).json({ ok: true, data: categories });
+  } catch (err) {
+    console.error("Failed to fetch buyback categories:", err);
+    res.status(500).json({
+      ok: false,
+      message: "Failed to fetch buyback categories",
+      error: err,
+    });
+  }
+});
+
+adminRouter.patch("/buyback-categories/:id", async (req, res) => {
+  const { accepted, percentOffered } = req.body;
+
+  try {
+    const category = await BuybackCategory.findByIdAndUpdate(
+      req.params.id,
+      { accepted, percentOffered },
+      { new: true },
+    );
+
+    if (!category) {
+      res
+        .status(404)
+        .json({ ok: false, message: "Buyback category not found" });
+      return;
+    }
+
+    res.status(200).json({ ok: true, data: category });
+  } catch (err) {
+    console.error("Failed to update buyback category:", err);
+    res.status(500).json({
+      ok: false,
+      message: "Failed to update buyback category",
+      error: err,
+    });
+  }
+});
+
+adminRouter.get("/buyback-items", async (req, res) => {
+  const q = req.query.q as string | undefined;
+  const categoryId = req.query.categoryId as string | undefined;
+
+  const filter: Record<string, unknown> = {};
+  if (categoryId) filter.categoryId = categoryId;
+  if (q && q.length >= 2) {
+    const escaped = q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    filter.name = { $regex: escaped, $options: "i" };
+  }
+
+  if (!categoryId && !q) {
+    res.status(200).json({ ok: true, data: [] });
+    return;
+  }
+
+  try {
+    const items = await BuybackItem.find(filter)
+      .populate("categoryId", "name accepted percentOffered")
+      .sort({ name: 1 })
+      .limit(200);
+
+    res.status(200).json({ ok: true, data: items });
+  } catch (err) {
+    console.error("Failed to fetch buyback items:", err);
+    res.status(500).json({
+      ok: false,
+      message: "Failed to fetch buyback items",
+      error: err,
+    });
+  }
+});
+
+adminRouter.patch("/buyback-items/:id", async (req, res) => {
+  const { accepted, rateOverride, notes } = req.body;
+
+  try {
+    const item = await BuybackItem.findByIdAndUpdate(
+      req.params.id,
+      { accepted, rateOverride, notes },
+      { new: true },
+    ).populate("categoryId", "name accepted percentOffered");
+
+    if (!item) {
+      res.status(404).json({ ok: false, message: "Buyback item not found" });
+      return;
+    }
+
+    res.status(200).json({ ok: true, data: item });
+  } catch (err) {
+    console.error("Failed to update buyback item:", err);
+    res.status(500).json({
+      ok: false,
+      message: "Failed to update buyback item",
+      error: err,
+    });
+  }
+});
+
+adminRouter.get("/buyback-quotes", async (req, res) => {
+  const status = req.query.status as string | undefined;
+
+  const filter: Record<string, unknown> = {};
+  if (status) filter.status = status;
+
+  try {
+    const quotes = await BuybackQuote.find(filter)
+      .sort({ status: 1, createdAt: -1 })
+      .limit(200);
+
+    res.status(200).json({ ok: true, data: quotes });
+  } catch (err) {
+    console.error("Failed to fetch buyback quotes:", err);
+    res.status(500).json({
+      ok: false,
+      message: "Failed to fetch buyback quotes",
+      error: err,
+    });
   }
 });
 

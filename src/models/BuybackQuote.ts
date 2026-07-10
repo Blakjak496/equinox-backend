@@ -21,7 +21,11 @@ export interface IBuybackQuote extends Document {
   blendedPercent: number;
   // set later by the hauling-rate tool once pickup location is known
   pickupFee: number | null;
-  status: "pending_contract" | "matched" | "discrepancy" | "expired";
+  status: "pending_contract" | "matched" | "expired";
+  // independent of status - a matched quote's contract can still fail to
+  // reconcile (wrong items/value), which is a property of the match, not
+  // a different lifecycle stage
+  discrepancy: boolean;
   matchedContractId: number | null;
   expiresAt: Date;
 }
@@ -52,10 +56,11 @@ const BuybackQuoteSchema = new Schema<IBuybackQuote>(
     pickupFee: { type: Number, default: null },
     status: {
       type: String,
-      enum: ["pending_contract", "matched", "discrepancy", "expired"],
+      enum: ["pending_contract", "matched", "expired"],
       required: true,
       default: "pending_contract",
     },
+    discrepancy: { type: Boolean, required: true, default: false },
     matchedContractId: { type: Number, default: null },
     // TTL index: document is purged once the current time passes expiresAt
     expiresAt: { type: Date, required: true },

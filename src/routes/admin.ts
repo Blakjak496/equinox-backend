@@ -608,12 +608,15 @@ adminRouter.patch("/buyback-items/:id", async (req, res) => {
 adminRouter.get("/buyback-quotes", async (req, res) => {
   const status = req.query.status as string | undefined;
 
-  const filter: Record<string, unknown> = {};
-  if (status) filter.status = status;
+  // "discrepancy" is a pseudo-filter - it's an independent flag, not a
+  // status value, since a matched quote's contract can still fail to
+  // reconcile without changing its lifecycle stage.
+  const filter: Record<string, unknown> =
+    status === "discrepancy" ? { discrepancy: true } : status ? { status } : {};
 
   try {
     const quotes = await BuybackQuote.find(filter)
-      .sort({ status: 1, createdAt: -1 })
+      .sort({ discrepancy: -1, createdAt: -1 })
       .limit(200);
 
     res.status(200).json({ ok: true, data: quotes });

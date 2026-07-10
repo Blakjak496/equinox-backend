@@ -92,7 +92,8 @@ export async function matchBuybackContract(
   await BuybackQuote.updateOne(
     { referenceId },
     {
-      status: ok ? "matched" : "discrepancy",
+      status: "matched",
+      discrepancy: !ok,
       matchedContractId: contract.contract_id,
     },
   );

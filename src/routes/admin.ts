@@ -144,6 +144,18 @@ adminRouter.get("/stats", async (req, res) => {
   }
 });
 
+adminRouter.get("/systems/all", async (_req, res) => {
+  try {
+    const systems = await System.find().select("systemId name");
+    res.status(200).json({ ok: true, data: systems });
+  } catch (err) {
+    console.error("Failed to fetch all systems:", err);
+    res
+      .status(500)
+      .json({ ok: false, message: "Failed to fetch all systems", error: err });
+  }
+});
+
 adminRouter.get("/systems/search", async (req, res) => {
   const q = req.query.q as string | undefined;
 

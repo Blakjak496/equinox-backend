@@ -17,10 +17,20 @@ export interface IBuybackQuote extends Document {
   referenceId: string;
   items: IBuybackQuoteItem[];
   totalJbv: number;
+  // gross, pre-fee sum of accepted item offer values
   totalOfferValue: number;
   blendedPercent: number;
-  // set later by the hauling-rate tool once pickup location is known
-  pickupFee: number | null;
+  locationId: string;
+  // denormalized so historical quotes stay readable if the location is
+  // later renamed/removed
+  locationName: string;
+  // computed rate snapshot at quote time (location distance + live isotope
+  // price), not a stored/editable setting
+  haulingRatePerM3: number;
+  haulingFee: number;
+  // totalOfferValue - haulingFee; the actual figure the seller is told to
+  // put in the in-game contract
+  netTotalPrice: number;
   status: "pending_contract" | "matched" | "expired";
   // independent of status - a matched quote's contract can still fail to
   // reconcile (wrong items/value), which is a property of the match, not
@@ -53,7 +63,11 @@ const BuybackQuoteSchema = new Schema<IBuybackQuote>(
     totalJbv: { type: Number, required: true },
     totalOfferValue: { type: Number, required: true },
     blendedPercent: { type: Number, required: true },
-    pickupFee: { type: Number, default: null },
+    locationId: { type: String, required: true },
+    locationName: { type: String, required: true },
+    haulingRatePerM3: { type: Number, required: true },
+    haulingFee: { type: Number, required: true },
+    netTotalPrice: { type: Number, required: true },
     status: {
       type: String,
       enum: ["pending_contract", "matched", "expired"],

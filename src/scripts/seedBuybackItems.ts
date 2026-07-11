@@ -52,9 +52,9 @@ async function seed() {
       return [];
     }
 
-    // name/categoryId are kept in sync on every run; accepted/rateOverride/notes
-    // are only set on first insert so this stays safe to re-run without
-    // clobbering admin edits.
+    // name/categoryId are kept in sync on every run; all admin-editable
+    // fields are only set on first insert so this stays safe to re-run
+    // without clobbering admin edits.
     return [
       {
         updateOne: {
@@ -69,6 +69,9 @@ async function seed() {
               accepted: null,
               rateOverride: null,
               notes: null,
+              variable: null,
+              haulable: null,
+              acceptedLocationIds: null,
             },
           },
           upsert: true,

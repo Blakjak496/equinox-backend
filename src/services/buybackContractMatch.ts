@@ -83,7 +83,7 @@ export async function matchBuybackContract(
     if (contractQty > quotedQty) reasons.push(`extra_item:${typeId}`);
   }
 
-  if (contract.price !== quote.totalOfferValue) {
+  if (contract.price !== quote.netTotalPrice) {
     reasons.push("value_mismatch");
   }
 

@@ -8,6 +8,7 @@ import { ShipCategory } from "../models/ShipCategory";
 import { BuybackCategory } from "../models/BuybackCategory";
 import { BuybackItem } from "../models/BuybackItem";
 import { BuybackQuote } from "../models/BuybackQuote";
+import { BuybackLocation } from "../models/BuybackLocation";
 import {
   ensureSystemIsCached,
   getSystemIdByName,
@@ -516,6 +517,90 @@ adminRouter.post("/jump-routes/plan", async (req, res) => {
   }
 });
 
+adminRouter.get("/buyback-locations", async (_req, res) => {
+  try {
+    const locations = await BuybackLocation.find().sort({ name: 1 });
+    res.status(200).json({ ok: true, data: locations });
+  } catch (err) {
+    console.error("Failed to fetch buyback locations:", err);
+    res.status(500).json({
+      ok: false,
+      message: "Failed to fetch buyback locations",
+      error: err,
+    });
+  }
+});
+
+adminRouter.post("/buyback-locations", async (req, res) => {
+  const { name, isHub, distance } = req.body;
+
+  if (!name || typeof distance !== "number") {
+    res.status(400).json({
+      ok: false,
+      message: "name and distance are required",
+    });
+    return;
+  }
+
+  try {
+    const location = await BuybackLocation.create({
+      name,
+      isHub: Boolean(isHub),
+      distance,
+    });
+    res.status(200).json({ ok: true, data: location });
+  } catch (err) {
+    console.error("Failed to create buyback location:", err);
+    res.status(500).json({
+      ok: false,
+      message: "Failed to create buyback location",
+      error: err,
+    });
+  }
+});
+
+adminRouter.put("/buyback-locations/:id", async (req, res) => {
+  const { name, isHub, distance } = req.body;
+
+  try {
+    const location = await BuybackLocation.findByIdAndUpdate(
+      req.params.id,
+      { name, isHub, distance },
+      { new: true },
+    );
+
+    if (!location) {
+      res
+        .status(404)
+        .json({ ok: false, message: "Buyback location not found" });
+      return;
+    }
+
+    res.status(200).json({ ok: true, data: location });
+  } catch (err) {
+    console.error("Failed to update buyback location:", err);
+    res.status(500).json({
+      ok: false,
+      message: "Failed to update buyback location",
+      error: err,
+    });
+  }
+});
+
+adminRouter.delete("/buyback-locations/:id", async (req, res) => {
+  try {
+    await BuybackLocation.findByIdAndDelete(req.params.id);
+    res.status(200).json({ ok: true });
+  } catch (err) {
+    console.error("Failed to delete buyback location:", err);
+    res.status(500).json({
+      ok: false,
+      message: "Failed to delete buyback location",
+      error: err,
+    });
+  }
+});
+
 adminRouter.get("/buyback-categories", async (_req, res) => {
   try {
     const categories = await BuybackCategory.find().sort({ name: 1 });
@@ -531,12 +616,13 @@ adminRouter.get("/buyback-categories", async (_req, res) => {
 });
 
 adminRouter.patch("/buyback-categories/:id", async (req, res) => {
-  const { accepted, percentOffered } = req.body;
+  const { accepted, percentOffered, variable, haulable, acceptedLocationIds } =
+    req.body;
 
   try {
     const category = await BuybackCategory.findByIdAndUpdate(
       req.params.id,
-      { accepted, percentOffered },
+      { accepted, percentOffered, variable, haulable, acceptedLocationIds },
       { new: true },
     );
 
@@ -592,12 +678,20 @@ adminRouter.get("/buyback-items", async (req, res) => {
 });
 
 adminRouter.patch("/buyback-items/:id", async (req, res) => {
-  const { accepted, rateOverride, notes } = req.body;
+  const { accepted, rateOverride, notes, variable, haulable, acceptedLocationIds } =
+    req.body;
 
   try {
     const item = await BuybackItem.findByIdAndUpdate(
       req.params.id,
-      { accepted, rateOverride, notes },
+      {
+        accepted,
+        rateOverride,
+        notes,
+        variable,
+        haulable,
+        acceptedLocationIds,
+      },
       { new: true },
     ).populate("categoryId", "name accepted percentOffered");
 

@@ -9,6 +9,10 @@ export interface IBuybackItem extends Document {
   // null means "inherit from category rate"
   rateOverride: number | null;
   notes: string | null;
+  // null means "inherit from category" for all three of these
+  variable: boolean | null;
+  haulable: boolean | null;
+  acceptedLocationIds: string[] | null;
 }
 
 const BuybackItemSchema = new Schema<IBuybackItem>(
@@ -24,6 +28,9 @@ const BuybackItemSchema = new Schema<IBuybackItem>(
     accepted: { type: Boolean, default: null },
     rateOverride: { type: Number, default: null },
     notes: { type: String, default: null },
+    variable: { type: Boolean, default: null },
+    haulable: { type: Boolean, default: null },
+    acceptedLocationIds: { type: [String], default: null },
   },
   { timestamps: true },
 );

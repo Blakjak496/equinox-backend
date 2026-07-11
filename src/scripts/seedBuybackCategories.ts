@@ -38,14 +38,21 @@ async function seed() {
   await mongoose.connect(uri);
   console.log("Connected to MongoDB");
 
-  // name is kept in sync on every run; accepted/percentOffered are only set
-  // on first insert so this stays safe to re-run without clobbering admin edits.
+  // name is kept in sync on every run; all admin-editable fields are only
+  // set on first insert so this stays safe to re-run without clobbering
+  // admin edits.
   const operations = publishedRows.map((row) => ({
     updateOne: {
       filter: { groupId: Number(row.groupID) },
       update: {
         $set: { groupId: Number(row.groupID), name: row.groupName },
-        $setOnInsert: { accepted: false, percentOffered: 0 },
+        $setOnInsert: {
+          accepted: false,
+          percentOffered: 0,
+          variable: true,
+          haulable: true,
+          acceptedLocationIds: null,
+        },
       },
       upsert: true,
     },

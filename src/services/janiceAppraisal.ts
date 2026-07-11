@@ -53,6 +53,28 @@ export async function getJaniceAppraisalByCode(
   return JSON.parse(text);
 }
 
+const ISOTOPE_PRICE_CACHE_MS = 12 * 60 * 60 * 1000; // 12 hours
+
+let cachedIsotopePrice: number | null = null;
+let isotopePriceCachedAt = 0;
+
+export async function getNitrogenIsotopePrice(): Promise<number> {
+  if (
+    cachedIsotopePrice !== null &&
+    Date.now() - isotopePriceCachedAt < ISOTOPE_PRICE_CACHE_MS
+  ) {
+    return cachedIsotopePrice;
+  }
+
+  const appraisal = await runJaniceAppraisal("Nitrogen Isotopes 1", "sell");
+  const item = appraisal.items[0];
+  if (!item) throw new Error("Failed to resolve Nitrogen Isotopes price");
+
+  cachedIsotopePrice = item.immediatePrices.sellPrice;
+  isotopePriceCachedAt = Date.now();
+  return cachedIsotopePrice;
+}
+
 export function buildJaniceUrl(code: string): string {
   return `https://janice.e-351.com/a/${code}`;
 }

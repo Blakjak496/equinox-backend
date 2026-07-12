@@ -11,7 +11,8 @@
     "seed:config": "ts-node src/scripts/seedConfig.ts",
     "seed:systems": "ts-node src/scripts/seedSystems.ts",
     "seed:buyback-categories": "ts-node src/scripts/seedBuybackCategories.ts",
-    "seed:buyback-items": "ts-node src/scripts/seedBuybackItems.ts"
+    "seed:buyback-items": "ts-node src/scripts/seedBuybackItems.ts",
+    "liquidity:run": "ts-node src/scripts/runLiquidityBatch.ts"
   },
   "keywords": [],
   "author": "",

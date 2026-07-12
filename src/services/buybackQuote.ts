@@ -141,12 +141,9 @@ export async function buildBuybackQuote(
     const basePercent = buybackItem.rateOverride ?? category?.percentOffered ?? 0;
     const variable = buybackItem.variable ?? category?.variable ?? true;
 
-    let liquidityModifier = 1.0;
-    if (variable) {
-      const orderCount = janiceItem.buyOrderCount;
-      if (orderCount < 10) liquidityModifier = 0.8;
-      else if (orderCount >= 50) liquidityModifier = 1.03;
-    }
+    const liquidityModifier = variable
+      ? (buybackItem.liquidityModifier ?? 1.0)
+      : 1.0;
 
     const liquidityAdjustedPercent = basePercent * liquidityModifier;
 

@@ -13,6 +13,13 @@ export interface IBuybackItem extends Document {
   variable: boolean | null;
   haulable: boolean | null;
   acceptedLocationIds: string[] | null;
+  // cached liquidity pipeline outputs, computed nightly - null until the
+  // first run has processed this item
+  liquidityModifier: number | null;
+  jitaLiquidityIndex: number | null;
+  // static SDE data, fetched once and cached permanently (never refreshed)
+  packagedVolume: number | null;
+  liquidityUpdatedAt: Date | null;
 }
 
 const BuybackItemSchema = new Schema<IBuybackItem>(
@@ -31,6 +38,10 @@ const BuybackItemSchema = new Schema<IBuybackItem>(
     variable: { type: Boolean, default: null },
     haulable: { type: Boolean, default: null },
     acceptedLocationIds: { type: [String], default: null },
+    liquidityModifier: { type: Number, default: null },
+    jitaLiquidityIndex: { type: Number, default: null },
+    packagedVolume: { type: Number, default: null },
+    liquidityUpdatedAt: { type: Date, default: null },
   },
   { timestamps: true },
 );

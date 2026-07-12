@@ -26,6 +26,7 @@ export type BuybackQuoteResult =
       totalOfferValue: number;
       blendedPercent: number;
       haulingFee: number;
+      pickupFee: number;
       netTotalPrice: number;
     }
   | {
@@ -52,6 +53,14 @@ export async function buildBuybackQuote(
 
   const haulingRatePerM3 =
     (location.distance * ISOTOPES_PER_LY * isotopePrice) / JF_CARGO_M3;
+
+  // Flat fuel-cost-only fee for satellite locations with a pickup service -
+  // not divided by cargo capacity like haulingRatePerM3, since this is the
+  // actual cost of one dedicated trip to fetch the items, not a per-m3 rate.
+  const pickupFee =
+    location.distanceFromHub != null
+      ? location.distanceFromHub * ISOTOPES_PER_LY * isotopePrice
+      : 0;
 
   const typeIds = appraisal.items.map((item) => item.itemType.eid);
   const buybackItems = await BuybackItem.find({ typeId: { $in: typeIds } });
@@ -175,7 +184,7 @@ export async function buildBuybackQuote(
   const blendedPercent = totalJbv > 0 ? (totalOfferValue / totalJbv) * 100 : 0;
 
   const haulingFee = haulingRatePerM3 * feeEligibleVolume;
-  const netTotalPrice = totalOfferValue - haulingFee;
+  const netTotalPrice = totalOfferValue - haulingFee - pickupFee;
 
   if (netTotalPrice > CAP_ISK) {
     return { ok: false, reason: "cap_exceeded", netTotalPrice };
@@ -196,6 +205,7 @@ export async function buildBuybackQuote(
     locationName: location.name,
     haulingRatePerM3,
     haulingFee,
+    pickupFee,
     netTotalPrice,
     status: "pending_contract",
     expiresAt,
@@ -209,6 +219,7 @@ export async function buildBuybackQuote(
     totalOfferValue,
     blendedPercent,
     haulingFee,
+    pickupFee,
     netTotalPrice,
   };
 }

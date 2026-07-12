@@ -532,7 +532,7 @@ adminRouter.get("/buyback-locations", async (_req, res) => {
 });
 
 adminRouter.post("/buyback-locations", async (req, res) => {
-  const { name, isHub, distance } = req.body;
+  const { name, isHub, distance, distanceFromHub } = req.body;
 
   if (!name || typeof distance !== "number") {
     res.status(400).json({
@@ -547,6 +547,7 @@ adminRouter.post("/buyback-locations", async (req, res) => {
       name,
       isHub: Boolean(isHub),
       distance,
+      distanceFromHub: distanceFromHub ?? null,
     });
     res.status(200).json({ ok: true, data: location });
   } catch (err) {
@@ -560,12 +561,12 @@ adminRouter.post("/buyback-locations", async (req, res) => {
 });
 
 adminRouter.put("/buyback-locations/:id", async (req, res) => {
-  const { name, isHub, distance } = req.body;
+  const { name, isHub, distance, distanceFromHub } = req.body;
 
   try {
     const location = await BuybackLocation.findByIdAndUpdate(
       req.params.id,
-      { name, isHub, distance },
+      { name, isHub, distance, distanceFromHub },
       { new: true },
     );
 

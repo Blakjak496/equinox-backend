@@ -7,6 +7,9 @@ export interface IBuybackQuoteItem {
   quantity: number;
   jbvPerUnit: number;
   totalJbv: number;
+  // unitVolume * quantity - computed from Janice's item data regardless of
+  // whether the item is recognised/accepted
+  volume: number;
   percentOffered: number;
   offerValue: number;
   accepted: boolean;
@@ -51,6 +54,7 @@ const BuybackQuoteItemSchema = new Schema<IBuybackQuoteItem>(
     quantity: { type: Number, required: true },
     jbvPerUnit: { type: Number, required: true },
     totalJbv: { type: Number, required: true },
+    volume: { type: Number, required: true },
     percentOffered: { type: Number, required: true },
     offerValue: { type: Number, required: true },
     accepted: { type: Boolean, required: true },

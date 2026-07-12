@@ -85,11 +85,12 @@ export async function buildBuybackQuote(
     const totalJbv = jbvPerUnit * quantity;
     const unitVolume =
       janiceItem.itemType.packagedVolume || janiceItem.itemType.volume;
+    const volume = unitVolume * quantity;
 
     const buybackItem = itemByTypeId.get(typeId);
     if (!buybackItem) {
       quoteItems.push(
-        rejected(typeId, name, "Unknown", quantity, jbvPerUnit, totalJbv, "Item not recognised"),
+        rejected(typeId, name, "Unknown", quantity, jbvPerUnit, totalJbv, volume, "Item not recognised"),
       );
       continue;
     }
@@ -97,9 +98,20 @@ export async function buildBuybackQuote(
     const category = categoryById.get(String(buybackItem.categoryId));
     const categoryName = category?.name ?? "Uncategorised";
 
+    // Not-accepted items are rejected immediately - no need to evaluate
+    // JBV or location restrictions for something that isn't bought back
+    // at all.
+    const accepted = buybackItem.accepted ?? category?.accepted ?? false;
+    if (!accepted) {
+      quoteItems.push(
+        rejected(typeId, name, categoryName, quantity, jbvPerUnit, totalJbv, volume, "Not currently accepted"),
+      );
+      continue;
+    }
+
     if (jbvPerUnit <= 0) {
       quoteItems.push(
-        rejected(typeId, name, categoryName, quantity, jbvPerUnit, totalJbv, "No buy value"),
+        rejected(typeId, name, categoryName, quantity, jbvPerUnit, totalJbv, volume, "No buy value"),
       );
       continue;
     }
@@ -119,16 +131,9 @@ export async function buildBuybackQuote(
           quantity,
           jbvPerUnit,
           totalJbv,
+          volume,
           "Not accepted from this location",
         ),
-      );
-      continue;
-    }
-
-    const accepted = buybackItem.accepted ?? category?.accepted ?? false;
-    if (!accepted) {
-      quoteItems.push(
-        rejected(typeId, name, categoryName, quantity, jbvPerUnit, totalJbv, "Not currently accepted"),
       );
       continue;
     }
@@ -169,6 +174,7 @@ export async function buildBuybackQuote(
       quantity,
       jbvPerUnit,
       totalJbv,
+      volume,
       percentOffered: finalPercent,
       offerValue,
       accepted: true,
@@ -231,6 +237,7 @@ function rejected(
   quantity: number,
   jbvPerUnit: number,
   totalJbv: number,
+  volume: number,
   rejectReason: string,
 ): IBuybackQuoteItem {
   return {
@@ -240,6 +247,7 @@ function rejected(
     quantity,
     jbvPerUnit,
     totalJbv,
+    volume,
     percentOffered: 0,
     offerValue: 0,
     accepted: false,

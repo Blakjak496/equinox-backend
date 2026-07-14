@@ -21,8 +21,7 @@ export interface IBuybackItem extends Document {
   // null means "inherit from category rate"
   rateOverride: number | null;
   notes: string | null;
-  // null means "inherit from category" for all three of these
-  variable: boolean | null;
+  // null means "inherit from category" for both of these
   haulable: boolean | null;
   acceptedLocationIds: string[] | null;
   // static SDE data, fetched once and cached permanently (never refreshed)
@@ -67,7 +66,6 @@ const BuybackItemSchema = new Schema<IBuybackItem>(
     accepted: { type: Boolean, default: null },
     rateOverride: { type: Number, default: null },
     notes: { type: String, default: null },
-    variable: { type: Boolean, default: null },
     haulable: { type: Boolean, default: null },
     acceptedLocationIds: { type: [String], default: null },
     packagedVolume: { type: Number, default: null },

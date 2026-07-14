@@ -444,12 +444,15 @@ export async function updateRecommendedRatesForAllItems(): Promise<void> {
       `[pricingRecommendation] ${acceptedItems.length}/${allItems.length} items are accepted - processing those`,
     );
 
-    // Scope exclusions apply before any ESI calls for that item (spec
-    // Section 6) - split up front so the sweep/history budget is only
-    // spent on items that actually run the formula. Items already known
-    // non-tradable (from a previous run) are dropped entirely - no
-    // recommendedRate to compute, no point re-asking ESI something it will
-    // always refuse.
+    // Capital-class ships (haulable=false) get a flat offer before any ESI
+    // calls for that item (spec Section 6) - split up front so the
+    // sweep/history budget is only spent on items that actually run the
+    // formula. Every other accepted item now runs through the formula
+    // regardless of category/item settings - a recommendation is generated
+    // for everything, the operator decides item by item whether to use it.
+    // Items already known non-tradable (from a previous run) are dropped
+    // entirely - no recommendedRate to compute, no point re-asking ESI
+    // something it will always refuse.
     const excludedItems: { item: IBuybackItem; recommendedRate: number }[] = [];
     const eligibleItems: IBuybackItem[] = [];
     let skippedNonTradable = 0;
@@ -462,22 +465,16 @@ export async function updateRecommendedRatesForAllItems(): Promise<void> {
 
       const category = categoryById.get(String(item.categoryId));
       const haulable = item.haulable ?? category?.haulable ?? true;
-      const variable = item.variable ?? category?.variable ?? true;
-      const baseRatePercent = item.rateOverride ?? category?.percentOffered ?? 0;
 
       if (!haulable) {
         excludedItems.push({ item, recommendedRate: CAPITAL_CLASS_FLAT_OFFER_PERCENT });
-        continue;
-      }
-      if (!variable) {
-        excludedItems.push({ item, recommendedRate: baseRatePercent });
         continue;
       }
       eligibleItems.push(item);
     }
 
     console.log(
-      `[pricingRecommendation] ${excludedItems.length} scope-excluded (flat/passthrough), ${skippedNonTradable} known non-tradable (skipped), ${eligibleItems.length} run through the formula`,
+      `[pricingRecommendation] ${excludedItems.length} capital-class (flat offer), ${skippedNonTradable} known non-tradable (skipped), ${eligibleItems.length} run through the formula`,
     );
 
     for (const { item, recommendedRate } of excludedItems) {

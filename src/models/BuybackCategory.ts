@@ -5,10 +5,6 @@ export interface IBuybackCategory extends Document {
   name: string;
   accepted: boolean;
   percentOffered: number;
-  // gates the liquidity modifier + margin safety net - false for
-  // categories deliberately priced low for reasons unrelated to
-  // liquidity/margin (ship size tiers, T1 Hauler, capital hulls)
-  variable: boolean;
   // whether this category's volume counts toward the hauling fee -
   // false for capital-class hulls that can't be JF-hauled at all
   haulable: boolean;
@@ -22,7 +18,6 @@ const BuybackCategorySchema = new Schema<IBuybackCategory>(
     name: { type: String, required: true },
     accepted: { type: Boolean, required: true, default: false },
     percentOffered: { type: Number, required: true, default: 0 },
-    variable: { type: Boolean, required: true, default: true },
     haulable: { type: Boolean, required: true, default: true },
     acceptedLocationIds: { type: [String], default: null },
   },

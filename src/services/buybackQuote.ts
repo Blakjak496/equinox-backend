@@ -139,14 +139,12 @@ export async function buildBuybackQuote(
     }
 
     const basePercent = buybackItem.rateOverride ?? category?.percentOffered ?? 0;
-    const variable = buybackItem.variable ?? category?.variable ?? true;
 
-    // Downward-only safety net: never overrides a deliberately low
-    // variable=false rate, and never pulls a large margin back down. The
-    // pricing-recommendation engine's output is advisory only here - the
-    // operator's set rate is what's actually offered.
+    // Downward-only safety net, applied to every item: catches any rate -
+    // manually set, inherited, or just stale - that no longer clears the
+    // minimum margin after tax because JBV shifted since it was last set.
     let finalPercent = basePercent;
-    if (variable && safeCeilingPercent - basePercent < MARGIN_FLOOR_PERCENT) {
+    if (safeCeilingPercent - basePercent < MARGIN_FLOOR_PERCENT) {
       finalPercent = safeCeilingPercent - MARGIN_FLOOR_PERCENT;
     }
 

@@ -12,7 +12,7 @@
     "seed:systems": "ts-node src/scripts/seedSystems.ts",
     "seed:buyback-categories": "ts-node src/scripts/seedBuybackCategories.ts",
     "seed:buyback-items": "ts-node src/scripts/seedBuybackItems.ts",
-    "liquidity:run": "ts-node src/scripts/runLiquidityBatch.ts"
+    "pricing:run": "ts-node src/scripts/runPricingRecommendationBatch.ts"
   },
   "keywords": [],
   "author": "",

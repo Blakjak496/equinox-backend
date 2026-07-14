@@ -135,8 +135,46 @@ adminRouter.delete("/routes", async (req, res) => {
 
 adminRouter.get("/stats", async (req, res) => {
   try {
-    const stats = await Stats.findOne();
-    res.status(200).json({ ok: true, data: stats });
+    const [
+      stats,
+      pendingAgg,
+      matchedCount,
+      expiredCount,
+      discrepancyCount,
+      itemsWithPendingRecommendation,
+    ] = await Promise.all([
+      Stats.findOne(),
+      BuybackQuote.aggregate([
+        { $match: { status: "pending_contract" } },
+        {
+          $group: {
+            _id: null,
+            count: { $sum: 1 },
+            value: { $sum: "$netTotalPrice" },
+          },
+        },
+      ]),
+      BuybackQuote.countDocuments({ status: "matched" }),
+      BuybackQuote.countDocuments({ status: "expired" }),
+      BuybackQuote.countDocuments({ discrepancy: true }),
+      BuybackItem.countDocuments({ recommendationPending: true }),
+    ]);
+
+    const pendingBuybackContracts = pendingAgg[0]?.count ?? 0;
+    const pendingBuybackValue = pendingAgg[0]?.value ?? 0;
+
+    res.status(200).json({
+      ok: true,
+      data: {
+        ...(stats?.toObject() ?? {}),
+        pendingBuybackContracts,
+        pendingBuybackValue,
+        matchedBuybackContracts: matchedCount,
+        expiredBuybackContracts: expiredCount,
+        discrepancyCount,
+        itemsWithPendingRecommendation,
+      },
+    });
   } catch (err) {
     console.error("Failed to get stats:", err);
     res
@@ -645,9 +683,83 @@ adminRouter.patch("/buyback-categories/:id", async (req, res) => {
   }
 });
 
+// Every item resolving accepted (item.accepted ?? category.accepted),
+// across all categories, with the owning category populated - used by the
+// pricing page's category tree, which only ever shows accepted items and
+// needs to know up front which categories have any before rendering them.
+async function fetchResolvedAcceptedItems() {
+  return BuybackItem.aggregate([
+    {
+      $lookup: {
+        from: BuybackCategory.collection.name,
+        localField: "categoryId",
+        foreignField: "_id",
+        as: "category",
+      },
+    },
+    { $unwind: "$category" },
+    {
+      $match: {
+        $expr: { $eq: [{ $ifNull: ["$accepted", "$category.accepted"] }, true] },
+      },
+    },
+    { $sort: { name: 1 } },
+    {
+      $project: {
+        typeId: 1,
+        name: 1,
+        accepted: 1,
+        rateOverride: 1,
+        notes: 1,
+        variable: 1,
+        haulable: 1,
+        acceptedLocationIds: 1,
+        packagedVolume: 1,
+        avgVolume: 1,
+        stdDev: 1,
+        sActive: 1,
+        demandVelocity: 1,
+        marketMultiplier: 1,
+        recommendedRate: 1,
+        recommendedRateUpdatedAt: 1,
+        recommendationPending: 1,
+        dismissedRecommendedRate: 1,
+        categoryId: {
+          _id: "$category._id",
+          name: "$category.name",
+          accepted: "$category.accepted",
+          percentOffered: "$category.percentOffered",
+          variable: "$category.variable",
+          haulable: "$category.haulable",
+          acceptedLocationIds: "$category.acceptedLocationIds",
+        },
+      },
+    },
+  ]);
+}
+
 adminRouter.get("/buyback-items", async (req, res) => {
   const q = req.query.q as string | undefined;
   const categoryId = req.query.categoryId as string | undefined;
+  const recommendationPending = req.query.recommendationPending as
+    | string
+    | undefined;
+  const accepted = req.query.accepted as string | undefined;
+
+  if (accepted === "true") {
+    try {
+      const items = await fetchResolvedAcceptedItems();
+      res.status(200).json({ ok: true, data: items });
+    } catch (err) {
+      console.error("Failed to fetch accepted buyback items:", err);
+      res.status(500).json({
+        ok: false,
+        message: "Failed to fetch accepted buyback items",
+        error: err,
+      });
+    }
+    return;
+  }
 
   const filter: Record<string, unknown> = {};
   if (categoryId) filter.categoryId = categoryId;
@@ -655,8 +767,9 @@ adminRouter.get("/buyback-items", async (req, res) => {
     const escaped = q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     filter.name = { $regex: escaped, $options: "i" };
   }
+  if (recommendationPending === "true") filter.recommendationPending = true;
 
-  if (!categoryId && !q) {
+  if (!categoryId && !q && recommendationPending !== "true") {
     res.status(200).json({ ok: true, data: [] });
     return;
   }
@@ -679,8 +792,16 @@ adminRouter.get("/buyback-items", async (req, res) => {
 });
 
 adminRouter.patch("/buyback-items/:id", async (req, res) => {
-  const { accepted, rateOverride, notes, variable, haulable, acceptedLocationIds } =
-    req.body;
+  const {
+    accepted,
+    rateOverride,
+    notes,
+    variable,
+    haulable,
+    acceptedLocationIds,
+    recommendationPending,
+    dismissedRecommendedRate,
+  } = req.body;
 
   try {
     const item = await BuybackItem.findByIdAndUpdate(
@@ -692,6 +813,8 @@ adminRouter.patch("/buyback-items/:id", async (req, res) => {
         variable,
         haulable,
         acceptedLocationIds,
+        recommendationPending,
+        dismissedRecommendedRate,
       },
       { new: true },
     ).populate("categoryId", "name accepted percentOffered");

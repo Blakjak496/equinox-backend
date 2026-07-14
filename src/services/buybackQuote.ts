@@ -141,19 +141,12 @@ export async function buildBuybackQuote(
     const basePercent = buybackItem.rateOverride ?? category?.percentOffered ?? 0;
     const variable = buybackItem.variable ?? category?.variable ?? true;
 
-    const liquidityModifier = variable
-      ? (buybackItem.liquidityModifier ?? 1.0)
-      : 1.0;
-
-    const liquidityAdjustedPercent = basePercent * liquidityModifier;
-
     // Downward-only safety net: never overrides a deliberately low
-    // variable=false rate, and never pulls a large margin back down.
-    let finalPercent = liquidityAdjustedPercent;
-    if (
-      variable &&
-      safeCeilingPercent - liquidityAdjustedPercent < MARGIN_FLOOR_PERCENT
-    ) {
+    // variable=false rate, and never pulls a large margin back down. The
+    // pricing-recommendation engine's output is advisory only here - the
+    // operator's set rate is what's actually offered.
+    let finalPercent = basePercent;
+    if (variable && safeCeilingPercent - basePercent < MARGIN_FLOOR_PERCENT) {
       finalPercent = safeCeilingPercent - MARGIN_FLOOR_PERCENT;
     }
 

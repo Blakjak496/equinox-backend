@@ -1,6 +1,6 @@
 import mongoose from "mongoose";
 import dotenv from "dotenv";
-import { updateLiquidityIndexForAllItems } from "../services/liquidityIndex";
+import { updateRecommendedRatesForAllItems } from "../services/pricingRecommendation";
 
 dotenv.config();
 
@@ -11,12 +11,12 @@ async function run() {
   await mongoose.connect(uri);
   console.log("Connected to MongoDB");
 
-  await updateLiquidityIndexForAllItems();
+  await updateRecommendedRatesForAllItems();
 
   await mongoose.disconnect();
 }
 
 run().catch((err) => {
-  console.error("Liquidity batch run failed:", err);
+  console.error("Pricing recommendation batch run failed:", err);
   process.exit(1);
 });

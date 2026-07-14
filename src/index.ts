@@ -3,7 +3,7 @@ import dotenv from "dotenv";
 import { connectDB } from "./lib/db";
 import cron from "node-cron";
 import { syncContracts } from "./services/syncContracts";
-import { updateLiquidityIndexForAllItems } from "./services/liquidityIndex";
+import { updateRecommendedRatesForAllItems } from "./services/pricingRecommendation";
 import { initConfig } from "./lib/config";
 import { initSystemCache } from "./lib/systemCache";
 import authRouter from "./routes/auth";
@@ -46,11 +46,11 @@ async function start() {
   });
 
   // 2pm server time - a few hours after ESI's daily market data refresh
-  // (~11:00 UTC, shortly after downtime). updateLiquidityIndexForAllItems()
+  // (~11:00 UTC, shortly after downtime). updateRecommendedRatesForAllItems()
   // no-ops if a previous pass is still running, so this is safe even if a
   // run somehow spans past the next day's trigger.
   cron.schedule("0 14 * * *", () => {
-    updateLiquidityIndexForAllItems();
+    updateRecommendedRatesForAllItems();
   });
 
   app.listen(PORT, () => {

@@ -1,5 +1,17 @@
 import mongoose, { Schema, Document, Types } from "mongoose";
 
+// Raw ESI history entry shape, stored verbatim rather than pre-picked down
+// to {date, volume} - avgVolume/stdDev are still derived from .volume at
+// compute time, but average/highest/lowest/order_count are kept too.
+export interface IBuybackItemHistoryEntry {
+  date: string;
+  average: number;
+  highest: number;
+  lowest: number;
+  order_count: number;
+  volume: number;
+}
+
 export interface IBuybackItem extends Document {
   typeId: number;
   name: string;
@@ -26,8 +38,9 @@ export interface IBuybackItem extends Document {
   // FinalOffer as a percent (e.g. 82.8), matching percentOffered/rateOverride
   recommendedRate: number | null;
   recommendedRateUpdatedAt: Date | null;
-  // rolling 30-day (date, volume) series, fully replaced each nightly run
-  dailyVolumeHistory: { date: string; volume: number }[];
+  // rolling 30-day series of full ESI history entries, fully replaced each
+  // nightly run
+  dailyVolumeHistory: IBuybackItemHistoryEntry[];
   // true when recommendedRate differs from the active rate and hasn't been
   // actioned (accepted or explicitly ignored) yet
   recommendationPending: boolean;
@@ -61,7 +74,17 @@ const BuybackItemSchema = new Schema<IBuybackItem>(
     recommendedRate: { type: Number, default: null },
     recommendedRateUpdatedAt: { type: Date, default: null },
     dailyVolumeHistory: {
-      type: [{ date: String, volume: Number, _id: false }],
+      type: [
+        {
+          date: String,
+          average: Number,
+          highest: Number,
+          lowest: Number,
+          order_count: Number,
+          volume: Number,
+          _id: false,
+        },
+      ],
       default: [],
     },
     recommendationPending: { type: Boolean, required: true, default: false },

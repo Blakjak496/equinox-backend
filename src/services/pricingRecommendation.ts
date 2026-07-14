@@ -44,14 +44,30 @@ const SIGMOID_F0 = sigmoid(0);
 const SIGMOID_F1 = sigmoid(1);
 const SIGMOID_SCALE = SIGMOID_CEILING / (SIGMOID_F1 - SIGMOID_F0);
 
+// Full ESI order/history shapes are stored verbatim (BuybackMarketSnapshot,
+// BuybackItem.dailyVolumeHistory) rather than pre-picked down to just the
+// fields the formula needs.
 type EsiMarketOrder = {
+  order_id: number;
   type_id: number;
   is_buy_order: boolean;
+  duration: number;
+  issued: string;
+  location_id: number;
+  min_volume: number;
+  price: number;
+  range: string;
+  system_id: number;
   volume_remain: number;
+  volume_total: number;
 };
 
 type EsiMarketHistoryEntry = {
   date: string;
+  average: number;
+  highest: number;
+  lowest: number;
+  order_count: number;
   volume: number;
 };
 
@@ -120,11 +136,14 @@ async function paceHistoryRequest(): Promise<void> {
 }
 
 // Sell-side only: SActive is "units currently listed for sale" - the
-// standing sell-order book, not buy orders.
+// standing sell-order book, not buy orders. Keeps the raw matching order
+// objects too (not just their summed volume) so the snapshot can store the
+// full response rather than a pre-aggregated number.
 function aggregateOrdersPage(
   orders: EsiMarketOrder[],
   typeIds: Set<number>,
   sellVolumeByType: Map<number, number>,
+  ordersByType: Map<number, EsiMarketOrder[]>,
 ): void {
   for (const order of orders) {
     if (order.is_buy_order) continue;
@@ -134,16 +153,25 @@ function aggregateOrdersPage(
       order.type_id,
       (sellVolumeByType.get(order.type_id) ?? 0) + order.volume_remain,
     );
+
+    const existing = ordersByType.get(order.type_id);
+    if (existing) {
+      existing.push(order);
+    } else {
+      ordersByType.set(order.type_id, [order]);
+    }
   }
 }
 
 // One bulk sweep of Jita's entire order book covers every item at once -
 // far cheaper than a per-item orders call, since ESI has no type_id filter
 // that would let us skip pages here anyway.
-async function sweepJitaOrders(
-  typeIds: Set<number>,
-): Promise<Map<number, number>> {
+async function sweepJitaOrders(typeIds: Set<number>): Promise<{
+  sellVolumeByType: Map<number, number>;
+  ordersByType: Map<number, EsiMarketOrder[]>;
+}> {
   const sellVolumeByType = new Map<number, number>();
+  const ordersByType = new Map<number, EsiMarketOrder[]>();
 
   const baseUrl = `https://esi.evetech.net/latest/markets/${REGION_ID}/orders/?datasource=tranquility`;
 
@@ -155,7 +183,7 @@ async function sweepJitaOrders(
   console.log(`[pricingRecommendation] orders sweep: ${totalPages} pages`);
 
   const firstPage = (await firstRes.json()) as EsiMarketOrder[];
-  aggregateOrdersPage(firstPage, typeIds, sellVolumeByType);
+  aggregateOrdersPage(firstPage, typeIds, sellVolumeByType, ordersByType);
 
   let lastRemaining: number | null = null;
 
@@ -173,7 +201,7 @@ async function sweepJitaOrders(
           return null;
         }
         const data = (await res.json()) as EsiMarketOrder[];
-        aggregateOrdersPage(data, typeIds, sellVolumeByType);
+        aggregateOrdersPage(data, typeIds, sellVolumeByType, ordersByType);
         return parseRateLimitHeader(res.headers).remaining;
       }),
     );
@@ -189,7 +217,7 @@ async function sweepJitaOrders(
     }
   }
 
-  return sellVolumeByType;
+  return { sellVolumeByType, ordersByType };
 }
 
 // AvgVolume and StdDev both come from the same 30-day history call -
@@ -199,7 +227,7 @@ async function sweepJitaOrders(
 async function fetchHistory(typeId: number): Promise<{
   avgVolume: number;
   stdDev: number;
-  series: { date: string; volume: number }[];
+  series: EsiMarketHistoryEntry[];
 } | null> {
   await paceHistoryRequest();
 
@@ -227,9 +255,7 @@ async function fetchHistory(typeId: number): Promise<{
         )
       : 0;
 
-  const series = recent.map((e) => ({ date: e.date, volume: e.volume }));
-
-  return { avgVolume, stdDev, series };
+  return { avgVolume, stdDev, series: recent };
 }
 
 async function fetchPackagedVolume(typeId: number): Promise<number | null> {
@@ -342,7 +368,8 @@ async function writeRecommendation(
     sActive: number;
     demandVelocity: number;
     marketMultiplier: number;
-    series: { date: string; volume: number }[];
+    series: EsiMarketHistoryEntry[];
+    orders: EsiMarketOrder[];
   },
 ): Promise<void> {
   const recommendationPending = applyRecommendationFlag(
@@ -373,6 +400,7 @@ async function writeRecommendation(
   await BuybackMarketSnapshot.create({
     typeId: item.typeId,
     sActive: result.sActive,
+    orders: result.orders,
     expiresAt,
   });
 }
@@ -442,7 +470,7 @@ export async function updateRecommendedRatesForAllItems(): Promise<void> {
     const eligibleTypeIds = new Set(eligibleItems.map((item) => item.typeId));
 
     console.log("[pricingRecommendation] starting Jita orders sweep...");
-    const sellVolumeByType = await sweepJitaOrders(eligibleTypeIds);
+    const { sellVolumeByType, ordersByType } = await sweepJitaOrders(eligibleTypeIds);
     console.log(
       `[pricingRecommendation] sweep complete: ${sellVolumeByType.size} types with sell orders`,
     );
@@ -455,6 +483,7 @@ export async function updateRecommendedRatesForAllItems(): Promise<void> {
         const category = categoryById.get(String(item.categoryId));
         const baseRatePercent = item.rateOverride ?? category?.percentOffered ?? 0;
         const sActive = sellVolumeByType.get(item.typeId) ?? 0;
+        const orders = ordersByType.get(item.typeId) ?? [];
 
         let packagedVolume = item.packagedVolume;
         if (packagedVolume === null) {
@@ -489,6 +518,7 @@ export async function updateRecommendedRatesForAllItems(): Promise<void> {
           demandVelocity: calc.demandVelocity,
           marketMultiplier: calc.marketMultiplier,
           series: history.series,
+          orders,
         });
         updated++;
       } catch (err) {

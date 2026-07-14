@@ -140,28 +140,35 @@ adminRouter.get("/stats", async (req, res) => {
       stats,
       pendingAgg,
       matchedCount,
-      expiredCount,
+      expiredQuoteCount,
       discrepancyCount,
-      itemsWithPendingRecommendation,
+      pendingRecommendationItems,
     ] = await Promise.all([
       Stats.findOne(),
-      BuybackQuote.aggregate([
-        { $match: { status: "pending_contract" } },
+      // A quote with no matching in-game contract yet is just a quote, not
+      // a contract - "pending contracts" has to be sourced from real
+      // Contract documents (linked via buybackQuoteId) or a fictional quote
+      // would inflate this count/value with nothing behind it.
+      Contract.aggregate([
+        { $match: { buybackQuoteId: { $ne: null }, status: "outstanding" } },
         {
           $group: {
             _id: null,
             count: { $sum: 1 },
-            value: { $sum: "$netTotalPrice" },
+            value: { $sum: "$price" },
           },
         },
       ]),
+      // "matched" inherently means a real contract was found and linked
+      // (matchedContractId is only ever set by the match), so this one
+      // genuinely does describe contracts, not just quotes.
       BuybackQuote.countDocuments({ status: "matched" }),
+      // An expired quote never had a contract linked either - same
+      // quote-vs-contract distinction, just framed as "Quotes" not
+      // "Contracts".
       BuybackQuote.countDocuments({ status: "expired" }),
       BuybackQuote.countDocuments({ discrepancy: true }),
-      BuybackItem.countDocuments({
-        recommendationPending: true,
-        nonTradable: { $ne: true },
-      }),
+      fetchResolvedAcceptedItems({ recommendationPending: true }),
     ]);
 
     const pendingBuybackContracts = pendingAgg[0]?.count ?? 0;
@@ -174,9 +181,9 @@ adminRouter.get("/stats", async (req, res) => {
         pendingBuybackContracts,
         pendingBuybackValue,
         matchedBuybackContracts: matchedCount,
-        expiredBuybackContracts: expiredCount,
+        expiredBuybackQuotes: expiredQuoteCount,
         discrepancyCount,
-        itemsWithPendingRecommendation,
+        itemsWithPendingRecommendation: pendingRecommendationItems.length,
       },
     });
   } catch (err) {
@@ -780,7 +787,11 @@ adminRouter.patch("/buyback-categories/:id", async (req, res) => {
 // across all categories, with the owning category populated - used by the
 // pricing page's category tree, which only ever shows accepted items and
 // needs to know up front which categories have any before rendering them.
-async function fetchResolvedAcceptedItems() {
+// extraMatch lets callers narrow further (e.g. recommendationPending: true)
+// while still guaranteeing the result never includes an item that isn't
+// currently accepted - a pending-recommendation flag on an item the
+// operator doesn't even accept shouldn't show up anywhere actionable.
+async function fetchResolvedAcceptedItems(extraMatch: Record<string, unknown> = {}) {
   return BuybackItem.aggregate([
     {
       $lookup: {
@@ -795,6 +806,7 @@ async function fetchResolvedAcceptedItems() {
       $match: {
         $expr: { $eq: [{ $ifNull: ["$accepted", "$category.accepted"] }, true] },
         nonTradable: { $ne: true },
+        ...extraMatch,
       },
     },
     { $sort: { name: 1 } },
@@ -840,9 +852,15 @@ adminRouter.get("/buyback-items", async (req, res) => {
     | undefined;
   const accepted = req.query.accepted as string | undefined;
 
-  if (accepted === "true") {
+  // recommendationPending is routed through the same resolved-accepted
+  // aggregation as accepted=true (even if accepted wasn't explicitly
+  // requested) - a pending flag on an item the operator doesn't currently
+  // accept should never surface anywhere actionable.
+  if (accepted === "true" || recommendationPending === "true") {
     try {
-      const items = await fetchResolvedAcceptedItems();
+      const items = await fetchResolvedAcceptedItems(
+        recommendationPending === "true" ? { recommendationPending: true } : {},
+      );
       res.status(200).json({ ok: true, data: items });
     } catch (err) {
       console.error("Failed to fetch accepted buyback items:", err);
@@ -861,9 +879,8 @@ adminRouter.get("/buyback-items", async (req, res) => {
     const escaped = q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     filter.name = { $regex: escaped, $options: "i" };
   }
-  if (recommendationPending === "true") filter.recommendationPending = true;
 
-  if (!categoryId && !q && recommendationPending !== "true") {
+  if (!categoryId && !q) {
     res.status(200).json({ ok: true, data: [] });
     return;
   }

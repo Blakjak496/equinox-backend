@@ -516,7 +516,14 @@ export async function updateRecommendedRatesForAllItems(): Promise<void> {
         const history = await fetchHistory(item.typeId);
         if (!history.ok) {
           if (history.nonTradable) {
-            await BuybackItem.updateOne({ _id: item._id }, { nonTradable: true });
+            // Also clears any stale recommendationPending flag - once an
+            // item is hidden from every admin list, there'd be no way to
+            // Accept/Ignore it, so a leftover pending flag would otherwise
+            // stick around forever and inflate the dashboard's count.
+            await BuybackItem.updateOne(
+              { _id: item._id },
+              { nonTradable: true, recommendationPending: false },
+            );
             newlyNonTradable++;
           } else {
             failed++;

@@ -158,7 +158,10 @@ adminRouter.get("/stats", async (req, res) => {
       BuybackQuote.countDocuments({ status: "matched" }),
       BuybackQuote.countDocuments({ status: "expired" }),
       BuybackQuote.countDocuments({ discrepancy: true }),
-      BuybackItem.countDocuments({ recommendationPending: true }),
+      BuybackItem.countDocuments({
+        recommendationPending: true,
+        nonTradable: { $ne: true },
+      }),
     ]);
 
     const pendingBuybackContracts = pendingAgg[0]?.count ?? 0;
@@ -720,7 +723,20 @@ adminRouter.delete("/buyback-locations/:id", async (req, res) => {
 adminRouter.get("/buyback-categories", async (_req, res) => {
   try {
     const categories = await BuybackCategory.find().sort({ name: 1 });
-    res.status(200).json({ ok: true, data: categories });
+
+    // A category is only worth showing if it has at least one item that
+    // isn't confirmed non-tradable - categories with zero items, or where
+    // every item has been flagged nonTradable, are hidden (not deleted -
+    // legitimate items can still be added to them later).
+    const visibleCategoryIds = await BuybackItem.distinct("categoryId", {
+      nonTradable: { $ne: true },
+    });
+    const visibleSet = new Set(visibleCategoryIds.map(String));
+    const data = categories.filter((category) =>
+      visibleSet.has(String(category._id)),
+    );
+
+    res.status(200).json({ ok: true, data });
   } catch (err) {
     console.error("Failed to fetch buyback categories:", err);
     res.status(500).json({
@@ -778,6 +794,7 @@ async function fetchResolvedAcceptedItems() {
     {
       $match: {
         $expr: { $eq: [{ $ifNull: ["$accepted", "$category.accepted"] }, true] },
+        nonTradable: { $ne: true },
       },
     },
     { $sort: { name: 1 } },
@@ -838,7 +855,7 @@ adminRouter.get("/buyback-items", async (req, res) => {
     return;
   }
 
-  const filter: Record<string, unknown> = {};
+  const filter: Record<string, unknown> = { nonTradable: { $ne: true } };
   if (categoryId) filter.categoryId = categoryId;
   if (q && q.length >= 2) {
     const escaped = q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");

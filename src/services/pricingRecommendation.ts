@@ -15,10 +15,6 @@ const SNAPSHOT_TTL_DAYS = 31;
 
 // fixed per spec - not operator-editable like salesTaxRate
 const MIN_MARGIN = 0.05;
-// capital-class ships aren't hauled, sold in place - none of the
-// volume/liquidity logic applies. Reusing haulable=false as the
-// capital-class signal, since that's what it was introduced for.
-const CAPITAL_CLASS_FLAT_OFFER_PERCENT = 65;
 // a recommendation only flags if it differs from the active rate by more
 // than this - avoids flagging on sub-noise floating point drift
 const RECOMMENDATION_FLAG_THRESHOLD_PERCENT = 0.05;
@@ -345,27 +341,6 @@ function applyRecommendationFlag(
   );
 }
 
-async function writeScopeExcluded(
-  item: IBuybackItem,
-  category: IBuybackCategory | undefined,
-  recommendedRate: number,
-): Promise<void> {
-  const recommendationPending = applyRecommendationFlag(
-    item,
-    category,
-    recommendedRate,
-  );
-
-  await BuybackItem.updateOne(
-    { _id: item._id },
-    {
-      recommendedRate,
-      recommendedRateUpdatedAt: new Date(),
-      recommendationPending,
-    },
-  );
-}
-
 async function writeRecommendation(
   item: IBuybackItem,
   category: IBuybackCategory | undefined,
@@ -444,16 +419,11 @@ export async function updateRecommendedRatesForAllItems(): Promise<void> {
       `[pricingRecommendation] ${acceptedItems.length}/${allItems.length} items are accepted - processing those`,
     );
 
-    // Capital-class ships (haulable=false) get a flat offer before any ESI
-    // calls for that item (spec Section 6) - split up front so the
-    // sweep/history budget is only spent on items that actually run the
-    // formula. Every other accepted item now runs through the formula
-    // regardless of category/item settings - a recommendation is generated
-    // for everything, the operator decides item by item whether to use it.
-    // Items already known non-tradable (from a previous run) are dropped
-    // entirely - no recommendedRate to compute, no point re-asking ESI
-    // something it will always refuse.
-    const excludedItems: { item: IBuybackItem; recommendedRate: number }[] = [];
+    // Every accepted item runs through the formula and gets a real
+    // recommendation - the operator decides item by item whether to use it,
+    // ignore it, or set their own rate. Items already known non-tradable
+    // (from a previous run) are dropped entirely - no recommendedRate to
+    // compute, no point re-asking ESI something it will always refuse.
     const eligibleItems: IBuybackItem[] = [];
     let skippedNonTradable = 0;
 
@@ -462,25 +432,12 @@ export async function updateRecommendedRatesForAllItems(): Promise<void> {
         skippedNonTradable++;
         continue;
       }
-
-      const category = categoryById.get(String(item.categoryId));
-      const haulable = item.haulable ?? category?.haulable ?? true;
-
-      if (!haulable) {
-        excludedItems.push({ item, recommendedRate: CAPITAL_CLASS_FLAT_OFFER_PERCENT });
-        continue;
-      }
       eligibleItems.push(item);
     }
 
     console.log(
-      `[pricingRecommendation] ${excludedItems.length} capital-class (flat offer), ${skippedNonTradable} known non-tradable (skipped), ${eligibleItems.length} run through the formula`,
+      `[pricingRecommendation] ${skippedNonTradable} known non-tradable (skipped), ${eligibleItems.length} run through the formula`,
     );
-
-    for (const { item, recommendedRate } of excludedItems) {
-      const category = categoryById.get(String(item.categoryId));
-      await writeScopeExcluded(item, category, recommendedRate);
-    }
 
     const eligibleTypeIds = new Set(eligibleItems.map((item) => item.typeId));
 
@@ -490,7 +447,7 @@ export async function updateRecommendedRatesForAllItems(): Promise<void> {
       `[pricingRecommendation] sweep complete: ${sellVolumeByType.size} types with sell orders`,
     );
 
-    let updated = excludedItems.length;
+    let updated = 0;
     let failed = 0;
     let newlyNonTradable = 0;
 

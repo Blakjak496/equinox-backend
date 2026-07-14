@@ -49,7 +49,7 @@ async function seed() {
         $setOnInsert: {
           accepted: false,
           percentOffered: 0,
-          haulable: true,
+          haul: true,
           acceptedLocationIds: null,
         },
       },

@@ -69,7 +69,7 @@ async function seed() {
               accepted: null,
               rateOverride: null,
               notes: null,
-              haulable: null,
+              haul: null,
               acceptedLocationIds: null,
             },
           },

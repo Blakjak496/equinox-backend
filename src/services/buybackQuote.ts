@@ -150,8 +150,8 @@ export async function buildBuybackQuote(
 
     const offerValue = totalJbv * (finalPercent / 100);
 
-    const haulable = buybackItem.haulable ?? category?.haulable ?? true;
-    if (haulable) {
+    const haul = buybackItem.haul ?? category?.haul ?? true;
+    if (haul) {
       feeEligibleVolume += unitVolume * quantity;
     }
 

@@ -755,12 +755,12 @@ adminRouter.get("/buyback-categories", async (_req, res) => {
 });
 
 adminRouter.patch("/buyback-categories/:id", async (req, res) => {
-  const { accepted, percentOffered, haulable, acceptedLocationIds } = req.body;
+  const { accepted, percentOffered, haul, acceptedLocationIds } = req.body;
 
   try {
     const category = await BuybackCategory.findByIdAndUpdate(
       req.params.id,
-      { accepted, percentOffered, haulable, acceptedLocationIds },
+      { accepted, percentOffered, haul, acceptedLocationIds },
       { new: true },
     );
 
@@ -816,7 +816,7 @@ async function fetchResolvedAcceptedItems(extraMatch: Record<string, unknown> = 
         accepted: 1,
         rateOverride: 1,
         notes: 1,
-        haulable: 1,
+        haul: 1,
         acceptedLocationIds: 1,
         packagedVolume: 1,
         avgVolume: 1,
@@ -833,7 +833,7 @@ async function fetchResolvedAcceptedItems(extraMatch: Record<string, unknown> = 
           name: "$category.name",
           accepted: "$category.accepted",
           percentOffered: "$category.percentOffered",
-          haulable: "$category.haulable",
+          haul: "$category.haul",
           acceptedLocationIds: "$category.acceptedLocationIds",
         },
       },
@@ -904,7 +904,7 @@ adminRouter.patch("/buyback-items/:id", async (req, res) => {
     accepted,
     rateOverride,
     notes,
-    haulable,
+    haul,
     acceptedLocationIds,
     recommendationPending,
     dismissedRecommendedRate,
@@ -917,7 +917,7 @@ adminRouter.patch("/buyback-items/:id", async (req, res) => {
         accepted,
         rateOverride,
         notes,
-        haulable,
+        haul,
         acceptedLocationIds,
         recommendationPending,
         dismissedRecommendedRate,

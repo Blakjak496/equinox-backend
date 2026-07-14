@@ -19,6 +19,17 @@ import { findJumpPath } from "../services/jumpPathfinder";
 
 const adminRouter = Router();
 
+// This data changes constantly (background jobs, PATCHes, quote matching)
+// and the admin UI always needs the current state - Express sets a weak
+// ETag on every response by default, which is enough for a browser to
+// conditionally-cache a GET and later replay a stale body via 304 without
+// ever hitting this router again. Disable caching outright for the whole
+// admin API rather than relying on every client to force a fresh fetch.
+adminRouter.use((_req, res, next) => {
+  res.set("Cache-Control", "no-store");
+  next();
+});
+
 adminRouter.get("/config", async (_req, res) => {
   try {
     const config = await Config.findOne();

@@ -6,6 +6,15 @@ import { buildBuybackQuote, INVALID_LOCATION_ERROR } from "../services/buybackQu
 
 const publicRouter = Router();
 
+// Same reasoning as adminRouter: pricing/location data here can change at
+// any time from the admin side, and Express's default weak ETag is enough
+// for a browser to serve a stale cached body via 304 instead of hitting
+// this router again. Customers should never see stale pricing.
+publicRouter.use((_req, res, next) => {
+  res.set("Cache-Control", "no-store");
+  next();
+});
+
 publicRouter.get("/routes", async (req, res) => {
   const pickup = req.query.pickup as string | undefined;
   const destination = req.query.destination as string | undefined;

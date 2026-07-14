@@ -224,24 +224,33 @@ async function sweepJitaOrders(typeIds: Set<number>): Promise<{
 // StdDev is the SAMPLE standard deviation (N-1=29) of the volume series
 // itself, never derived from order_count (see spec Section 1 for why that
 // proxy fails on flat markets).
-async function fetchHistory(typeId: number): Promise<{
-  avgVolume: number;
-  stdDev: number;
-  series: EsiMarketHistoryEntry[];
-} | null> {
+async function fetchHistory(typeId: number): Promise<
+  | { ok: true; avgVolume: number; stdDev: number; series: EsiMarketHistoryEntry[] }
+  | { ok: false; nonTradable: boolean }
+> {
   await paceHistoryRequest();
 
   const url = `https://esi.evetech.net/latest/markets/${REGION_ID}/history/?datasource=tranquility&type_id=${typeId}`;
   const res = await esiFetch(url);
   if (!res.ok) {
+    // ESI deterministically 400s the history endpoint for any type that
+    // isn't listed on this region's market at all (quest items, discontinued
+    // types, etc) - permanent per typeId, not a transient failure, so this
+    // gets flagged rather than logged-and-retried-forever.
+    if (res.status === 400) {
+      const body = (await res.json().catch(() => null)) as { error?: string } | null;
+      if (body?.error === "Type not tradable on market!") {
+        return { ok: false, nonTradable: true };
+      }
+    }
     console.warn(`[pricingRecommendation] history fetch failed for typeId=${typeId}: ${res.status}`);
-    return null;
+    return { ok: false, nonTradable: false };
   }
 
   const data = (await res.json()) as EsiMarketHistoryEntry[];
   const recent = data.slice(-HISTORY_DAYS);
   if (recent.length === 0) {
-    return { avgVolume: 0, stdDev: 0, series: [] };
+    return { ok: true, avgVolume: 0, stdDev: 0, series: [] };
   }
 
   const avgVolume =
@@ -255,7 +264,7 @@ async function fetchHistory(typeId: number): Promise<{
         )
       : 0;
 
-  return { avgVolume, stdDev, series: recent };
+  return { ok: true, avgVolume, stdDev, series: recent };
 }
 
 async function fetchPackagedVolume(typeId: number): Promise<number | null> {
@@ -437,11 +446,20 @@ export async function updateRecommendedRatesForAllItems(): Promise<void> {
 
     // Scope exclusions apply before any ESI calls for that item (spec
     // Section 6) - split up front so the sweep/history budget is only
-    // spent on items that actually run the formula.
+    // spent on items that actually run the formula. Items already known
+    // non-tradable (from a previous run) are dropped entirely - no
+    // recommendedRate to compute, no point re-asking ESI something it will
+    // always refuse.
     const excludedItems: { item: IBuybackItem; recommendedRate: number }[] = [];
     const eligibleItems: IBuybackItem[] = [];
+    let skippedNonTradable = 0;
 
     for (const item of acceptedItems) {
+      if (item.nonTradable) {
+        skippedNonTradable++;
+        continue;
+      }
+
       const category = categoryById.get(String(item.categoryId));
       const haulable = item.haulable ?? category?.haulable ?? true;
       const variable = item.variable ?? category?.variable ?? true;
@@ -459,7 +477,7 @@ export async function updateRecommendedRatesForAllItems(): Promise<void> {
     }
 
     console.log(
-      `[pricingRecommendation] ${excludedItems.length} scope-excluded (flat/passthrough), ${eligibleItems.length} run through the formula`,
+      `[pricingRecommendation] ${excludedItems.length} scope-excluded (flat/passthrough), ${skippedNonTradable} known non-tradable (skipped), ${eligibleItems.length} run through the formula`,
     );
 
     for (const { item, recommendedRate } of excludedItems) {
@@ -477,6 +495,7 @@ export async function updateRecommendedRatesForAllItems(): Promise<void> {
 
     let updated = excludedItems.length;
     let failed = 0;
+    let newlyNonTradable = 0;
 
     for (const item of eligibleItems) {
       try {
@@ -495,8 +514,13 @@ export async function updateRecommendedRatesForAllItems(): Promise<void> {
         }
 
         const history = await fetchHistory(item.typeId);
-        if (history === null) {
-          failed++;
+        if (!history.ok) {
+          if (history.nonTradable) {
+            await BuybackItem.updateOne({ _id: item._id }, { nonTradable: true });
+            newlyNonTradable++;
+          } else {
+            failed++;
+          }
           continue;
         }
 
@@ -529,7 +553,7 @@ export async function updateRecommendedRatesForAllItems(): Promise<void> {
 
     const durationSec = ((Date.now() - startedAt) / 1000).toFixed(1);
     console.log(
-      `[pricingRecommendation] run complete in ${durationSec}s: ${updated} updated, ${failed} failed`,
+      `[pricingRecommendation] run complete in ${durationSec}s: ${updated} updated, ${failed} failed, ${newlyNonTradable} newly flagged non-tradable (${skippedNonTradable} already known and skipped)`,
     );
   } finally {
     running = false;

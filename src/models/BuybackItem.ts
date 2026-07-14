@@ -47,6 +47,11 @@ export interface IBuybackItem extends Document {
   // the specific recommendedRate value last dismissed via "Ignore" - lets
   // the batch job avoid re-flagging the same recommendation every night
   dismissedRecommendedRate: number | null;
+  // true once ESI has confirmed this typeId isn't listed on any regional
+  // market ("Type not tradable on market!") - permanent per type_id, so the
+  // batch job skips the history fetch entirely on future runs instead of
+  // repeating a request that will always fail
+  nonTradable: boolean;
 }
 
 const BuybackItemSchema = new Schema<IBuybackItem>(
@@ -89,6 +94,7 @@ const BuybackItemSchema = new Schema<IBuybackItem>(
     },
     recommendationPending: { type: Boolean, required: true, default: false },
     dismissedRecommendedRate: { type: Number, default: null },
+    nonTradable: { type: Boolean, required: true, default: false },
   },
   { timestamps: true },
 );

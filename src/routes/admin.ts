@@ -2,6 +2,7 @@ import { Router } from "express";
 import { Config } from "../models/Config";
 import { Route } from "../models/Routes";
 import { Stats } from "../models/Stats";
+import { Contract } from "../models/Contract";
 import { System } from "../models/System";
 import { MainRoute } from "../models/MainRoute";
 import { ShipCategory } from "../models/ShipCategory";
@@ -180,6 +181,82 @@ adminRouter.get("/stats", async (req, res) => {
     res
       .status(500)
       .json({ ok: false, message: "Failed to get stats", error: err });
+  }
+});
+
+const TREND_DAYS = 30;
+
+// Zero-fills every day in the window so the frontend always gets a
+// continuous 30-point series (no gaps on days with no activity).
+function buildDailySeries<T extends { _id: string; count: number }>(
+  aggResult: T[],
+  valueKey: keyof T,
+): { date: string; count: number; value: number }[] {
+  const byDate = new Map(aggResult.map((row) => [row._id, row]));
+  const series: { date: string; count: number; value: number }[] = [];
+
+  for (let i = TREND_DAYS - 1; i >= 0; i--) {
+    const d = new Date();
+    d.setUTCDate(d.getUTCDate() - i);
+    const dateStr = d.toISOString().slice(0, 10);
+    const row = byDate.get(dateStr);
+    series.push({
+      date: dateStr,
+      count: row?.count ?? 0,
+      value: (row?.[valueKey] as number | undefined) ?? 0,
+    });
+  }
+
+  return series;
+}
+
+adminRouter.get("/stats/trends", async (_req, res) => {
+  try {
+    const windowStart = new Date(
+      Date.now() - TREND_DAYS * 24 * 60 * 60 * 1000,
+    );
+
+    const [haulingAgg, buybackAgg] = await Promise.all([
+      Contract.aggregate([
+        { $match: { status: "finished", dateCompleted: { $ne: null } } },
+        {
+          $addFields: {
+            completedDate: { $dateFromString: { dateString: "$dateCompleted" } },
+          },
+        },
+        { $match: { completedDate: { $gte: windowStart } } },
+        {
+          $group: {
+            _id: { $dateToString: { format: "%Y-%m-%d", date: "$completedDate" } },
+            count: { $sum: 1 },
+            revenue: { $sum: "$reward" },
+          },
+        },
+      ]),
+      BuybackQuote.aggregate([
+        { $match: { createdAt: { $gte: windowStart } } },
+        {
+          $group: {
+            _id: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } },
+            count: { $sum: 1 },
+            value: { $sum: "$netTotalPrice" },
+          },
+        },
+      ]),
+    ]);
+
+    res.status(200).json({
+      ok: true,
+      data: {
+        hauling: buildDailySeries(haulingAgg, "revenue"),
+        buyback: buildDailySeries(buybackAgg, "value"),
+      },
+    });
+  } catch (err) {
+    console.error("Failed to get stats trends:", err);
+    res
+      .status(500)
+      .json({ ok: false, message: "Failed to get stats trends", error: err });
   }
 });
 

@@ -31,8 +31,9 @@ export interface IBuybackQuote extends Document {
   // price), not a stored/editable setting
   haulingRatePerM3: number;
   haulingFee: number;
-  // flat fuel-cost-only fee for locations with a distanceFromHub set; 0 when
-  // the location has no pickup service (e.g. hubs)
+  // per-m3 pickup fee for locations with a pickupRatePerM3 set (scales with
+  // fee-eligible volume, same as haulingFee); 0 when the location has no
+  // pickup service (e.g. hubs)
   pickupFee: number;
   // totalOfferValue - haulingFee - pickupFee; the actual figure the seller
   // is told to put in the in-game contract

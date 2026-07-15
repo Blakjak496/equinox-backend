@@ -54,14 +54,6 @@ export async function buildBuybackQuote(
   const haulingRatePerM3 =
     (location.distance * ISOTOPES_PER_LY * isotopePrice) / JF_CARGO_M3;
 
-  // Flat fuel-cost-only fee for satellite locations with a pickup service -
-  // not divided by cargo capacity like haulingRatePerM3, since this is the
-  // actual cost of one dedicated trip to fetch the items, not a per-m3 rate.
-  const pickupFee =
-    location.distanceFromHub != null
-      ? location.distanceFromHub * ISOTOPES_PER_LY * isotopePrice
-      : 0;
-
   const typeIds = appraisal.items.map((item) => item.itemType.eid);
   const buybackItems = await BuybackItem.find({ typeId: { $in: typeIds } });
   const itemByTypeId = new Map<number, IBuybackItem>(
@@ -178,6 +170,16 @@ export async function buildBuybackQuote(
   const blendedPercent = totalJbv > 0 ? (totalOfferValue / totalJbv) * 100 : 0;
 
   const haulingFee = haulingRatePerM3 * feeEligibleVolume;
+
+  // Per-m3 pickup fee for satellite locations with a pickup service - scales
+  // with the same fee-eligible volume as haulingFee, so a contract that
+  // needs several trips to clear is actually charged for several trips,
+  // rather than a flat one-trip fee regardless of size.
+  const pickupFee =
+    location.pickupRatePerM3 != null
+      ? location.pickupRatePerM3 * feeEligibleVolume
+      : 0;
+
   const netTotalPrice = totalOfferValue - haulingFee - pickupFee;
 
   if (netTotalPrice > CAP_ISK) {

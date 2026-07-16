@@ -18,7 +18,16 @@ import {
   notifyNewBuybackContract,
   pingOverdue,
 } from "./discordNotify";
-import { matchBuybackContract } from "./buybackContractMatch";
+import { matchBuybackContract, matchBuyOrderContract } from "./buybackContractMatch";
+import { BuyOrder } from "../models/BuyOrder";
+
+const BUY_ORDER_RELEASE_STATUSES = [
+  "cancelled",
+  "rejected",
+  "deleted",
+  "reversed",
+  "failed",
+];
 
 let syncRunning: boolean = false;
 
@@ -93,6 +102,15 @@ export async function syncContracts(): Promise<void> {
       return (
         contract.type === "item_exchange" &&
         contract.assignee_id === corporationId
+      );
+    });
+
+    // Purchase Stock's contracts run the opposite direction from buyback -
+    // the corp is issuer (selling out), not assignee/recipient.
+    const outgoingItemExchangeContracts = allContracts.filter((contract) => {
+      return (
+        contract.type === "item_exchange" &&
+        contract.issuer_corporation_id === corporationId
       );
     });
 
@@ -436,6 +454,129 @@ export async function syncContracts(): Promise<void> {
           console.log(
             "Something went wrong while sending the new buyback contract notification: ",
             err,
+          );
+        }
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+    }
+
+    const existingOutgoingContracts = await Contract.find({
+      contractId: {
+        $in: outgoingItemExchangeContracts.map((contract) => contract.contract_id),
+      },
+    });
+
+    for (const esiContract of outgoingItemExchangeContracts) {
+      const existingContract = existingOutgoingContracts.find(
+        (contract) => Number(contract.contractId) === esiContract.contract_id,
+      );
+
+      const isNewContract = !existingContract;
+      const statusChanged =
+        !isNewContract && esiContract.status !== existingContract.status;
+
+      if (!isNewContract && !statusChanged) continue;
+
+      const pickupStructure = esiBudgetLow
+        ? null
+        : await getOrFetchStructure(esiContract.start_location_id, token);
+
+      const discordChannelType =
+        pickupStructure?.systemName?.toLowerCase().includes("jita") ?? false
+          ? "jita"
+          : "default";
+
+      // Only re-match on first sighting or if a prior attempt never linked a
+      // buy order - once linked, later status changes (finished/cancelled)
+      // are handled below without re-parsing the title every time.
+      let buyOrderId: string | null = existingContract?.buyOrderId ?? null;
+      let buyOrderDiscrepancy: IContractValidation | null =
+        existingContract?.buyOrderDiscrepancy ?? null;
+
+      if (isNewContract || !buyOrderId) {
+        try {
+          const match = await matchBuyOrderContract(
+            esiContract,
+            corporationId,
+            token,
+          );
+          buyOrderId = match.buyOrderId;
+          buyOrderDiscrepancy = match.buyOrderDiscrepancy;
+        } catch (err) {
+          console.log(
+            "Something went wrong while matching a buy order contract: ",
+            err,
+          );
+          buyOrderDiscrepancy = {
+            level: "warning",
+            reasons: ["match_error"],
+            message: "Could not verify this contract against a stored buy order",
+          };
+        }
+      }
+
+      const issuerId = esiContract.issuer_id;
+      const issuerCorpId = esiContract.issuer_corporation_id;
+      const acceptorId = esiContract.acceptor_id;
+
+      const issuer: ICharacter | null = await getOrFetchCharacter(issuerId);
+      if (issuer && issuer.corporationId !== issuerCorpId)
+        await getOrFetchCharacter(issuer.characterId, true);
+      await getOrFetchCorporation(issuerCorpId);
+
+      let acceptor: ICharacter | ICorporation | null;
+      if (acceptorId) {
+        acceptor = await getOrFetchCharacter(acceptorId);
+        if (!acceptor) acceptor = await getOrFetchCorporation(acceptorId);
+      } else acceptor = null;
+
+      await Contract.findOneAndUpdate(
+        { contractId: esiContract.contract_id },
+        {
+          contractId: esiContract.contract_id,
+          type: esiContract.type,
+          status: esiContract.status,
+          dateIssued: esiContract.date_issued,
+          dateExpired: esiContract.date_expired,
+          dateAccepted: esiContract.date_accepted,
+          dateCompleted: esiContract.date_completed,
+          title: esiContract.title,
+          volume: esiContract.volume,
+          price: esiContract.price,
+          issuerId: esiContract.issuer_id,
+          issuerCorporationId: esiContract.issuer_corporation_id,
+          assigneeId: esiContract.assignee_id,
+          acceptorId: esiContract.acceptor_id,
+          acceptedByName: acceptor ? acceptor.name : null,
+          availability: esiContract.availability,
+          forCorporation: esiContract.for_corporation,
+          startLocationId: esiContract.start_location_id,
+          endLocationId: esiContract.end_location_id,
+          pickupStructure,
+          discordChannelType,
+          buyOrderId,
+          buyOrderDiscrepancy,
+        },
+        { upsert: true, returnDocument: "after", setDefaultsOnInsert: true },
+      );
+
+      // A completed order's stock must never be released back to available
+      // (see BuybackItem.quantityOnHand doc comment) - only cancellation-like
+      // terminal states free the reservation.
+      if (buyOrderId) {
+        if (esiContract.status === "finished") {
+          await BuyOrder.updateOne(
+            { referenceId: buyOrderId, status: { $ne: "completed" } },
+            { status: "completed", completedAt: new Date(), matchedContractId: esiContract.contract_id },
+          );
+        } else if (
+          esiContract.status &&
+          BUY_ORDER_RELEASE_STATUSES.includes(esiContract.status)
+        ) {
+          await BuyOrder.updateOne(
+            { referenceId: buyOrderId, status: { $ne: "completed" } },
+            { status: "cancelled" },
           );
         }
       }

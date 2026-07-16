@@ -13,7 +13,8 @@
     "seed:buyback-categories": "ts-node src/scripts/seedBuybackCategories.ts",
     "seed:buyback-items": "ts-node src/scripts/seedBuybackItems.ts",
     "pricing:run": "ts-node src/scripts/runPricingRecommendationBatch.ts",
-    "haul:reset": "ts-node src/scripts/resetHaulFlags.ts"
+    "haul:reset": "ts-node src/scripts/resetHaulFlags.ts",
+    "reprocessing:import": "ts-node src/scripts/importReprocessingData.ts"
   },
   "keywords": [],
   "author": "",

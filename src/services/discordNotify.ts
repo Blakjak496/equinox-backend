@@ -1,4 +1,5 @@
 import { Contract, IContract } from "../models/Contract";
+import { IBuyOrder } from "../models/BuyOrder";
 
 export async function notifyNewContract(
   contract: IContract,
@@ -110,6 +111,33 @@ export async function notifyNewBuybackContract(
     { discordMessageId: json.messageId },
     { new: true },
   );
+}
+
+// Fires right after a BuyOrder is created (order-submission time, not
+// contract-match time) - there's no contract to link a message to yet, so
+// unlike the buyback/contract notifiers above this doesn't persist a
+// discordMessageId anywhere.
+export async function notifyNewBuyOrder(buyOrder: IBuyOrder): Promise<void> {
+  const data = {
+    referenceId: buyOrder.referenceId,
+    customerCharacterName: buyOrder.customerCharacterName,
+    items: buyOrder.items,
+    totalPrice: buyOrder.totalPrice,
+  };
+
+  const res = await fetch(
+    `http://localhost:${process.env.BOT_PORT}/notify/buy-order`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    },
+  );
+
+  const text = await res.text();
+  const json = JSON.parse(text) as { ok: boolean };
+
+  if (!json.ok) throw new Error("Failed to ping new buy order");
 }
 
 export async function pingOverdue(

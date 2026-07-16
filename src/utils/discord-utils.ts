@@ -189,6 +189,53 @@ export function buildBuybackContractNotificationPayload(
   };
 }
 
+// Fires at order-creation time, not contract-match time - unlike the
+// buyback notification above, there's no contract yet. This is the ping
+// telling the admin to go create one, titled with referenceId.
+export function buildBuyOrderNotificationPayload(
+  referenceId: string,
+  customerCharacterName: string,
+  items: { name: string; quantity: number; unitPrice: number }[],
+  totalPrice: number,
+) {
+  return {
+    embeds: [
+      {
+        title: "🛒 New Purchase Stock Order",
+        color: embedColors.blue,
+        fields: [
+          {
+            name: "Reference",
+            value: referenceId,
+            inline: false,
+          },
+          {
+            name: "Character",
+            value: customerCharacterName,
+            inline: true,
+          },
+          {
+            name: "Total Price",
+            value: `${totalPrice.toLocaleString()} ISK`,
+            inline: true,
+          },
+          {
+            name: "Items",
+            value: items
+              .map((item) => `${item.quantity}x ${item.name}`)
+              .join("\n"),
+            inline: false,
+          },
+        ],
+        footer: {
+          text: "Create an item_exchange contract to this character with the reference ID in the title",
+        },
+        timestamp: new Date().toISOString(),
+      },
+    ],
+  };
+}
+
 export const parseIskInput = (input: string): number | null => {
   const value = input.trim().toLowerCase();
 

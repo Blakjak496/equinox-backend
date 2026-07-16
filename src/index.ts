@@ -4,6 +4,8 @@ import { connectDB } from "./lib/db";
 import cron from "node-cron";
 import { syncContracts } from "./services/syncContracts";
 import { updateRecommendedRatesForAllItems } from "./services/pricingRecommendation";
+import { syncCorpAssetStock } from "./services/corpAssetSync";
+import { expireStaleBuyOrders } from "./services/buyOrder";
 import { initConfig } from "./lib/config";
 import { initSystemCache } from "./lib/systemCache";
 import authRouter from "./routes/auth";
@@ -43,6 +45,7 @@ async function start() {
 
   cron.schedule("3,18,33,48 * * * *", () => {
     syncContracts();
+    expireStaleBuyOrders();
   });
 
   // 2pm server time - a few hours after ESI's daily market data refresh
@@ -51,6 +54,13 @@ async function start() {
   // run somehow spans past the next day's trigger.
   cron.schedule("0 14 * * *", () => {
     updateRecommendedRatesForAllItems();
+  });
+
+  // Hourly - Purchase Stock's available quantity is only as fresh as the
+  // last poll, so this runs more often than the once-daily pricing job but
+  // doesn't need contract-sync's 15-minute cadence.
+  cron.schedule("0 * * * *", () => {
+    syncCorpAssetStock();
   });
 
   app.listen(PORT, () => {

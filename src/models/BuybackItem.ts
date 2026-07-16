@@ -51,6 +51,35 @@ export interface IBuybackItem extends Document {
   // batch job skips the history fetch entirely on future runs instead of
   // repeating a request that will always fail
   nonTradable: boolean;
+  // Purchase Stock ("buy side") - tracked per location rather than pooled,
+  // since stock at different hubs can't be combined to fill an order
+  // without an extra shipping cost that's out of scope for this service.
+  // Only locations with isHub:true AND a stockLocationId set are eligible -
+  // corpAssetSync prunes any entry whose location no longer qualifies.
+  stockByLocation: IBuybackItemLocationStock[];
+  // Purchase Stock price source: null prices this item normally (Janice buy
+  // value). Any other value reprocesses it locally (see ReprocessingMaterial
+  // + reprocessing.ts) and prices the resulting minerals instead, using the
+  // efficiency rate for this category. Item-level rather than a single
+  // appraisal-wide setting because a mixed cart (ore/ice alongside modules)
+  // can't have reprocessing applied selectively any other way - modules are
+  // technically reprocessable too, so a single whole-cart toggle would
+  // misprice them. Auto-set at import time from SDE category/group data
+  // where that's unambiguous (ore/ice, gas); left null (admin sets
+  // manually) for anything else, e.g. scrap/salvage.
+  reprocessingCategory: "ore_ice" | "gas" | "scrap" | null;
+}
+
+export interface IBuybackItemLocationStock {
+  locationId: Types.ObjectId;
+  // denormalized so the admin/customer-facing UI doesn't need a join
+  locationName: string;
+  quantity: number;
+  stockUpdatedAt: Date;
+  // Soft 7-day "sitting around" nudge, not a hard liquidation trigger. Set
+  // to now() on a 0 -> >0 transition, left untouched on top-ups (the older
+  // stock is still what's aging), cleared back to null at 0.
+  oldestUnsoldAcquiredAt: Date | null;
 }
 
 const BuybackItemSchema = new Schema<IBuybackItem>(
@@ -93,6 +122,28 @@ const BuybackItemSchema = new Schema<IBuybackItem>(
     recommendationPending: { type: Boolean, required: true, default: false },
     dismissedRecommendedRate: { type: Number, default: null },
     nonTradable: { type: Boolean, required: true, default: false },
+    stockByLocation: {
+      type: [
+        {
+          locationId: {
+            type: Schema.Types.ObjectId,
+            ref: "BuybackLocation",
+            required: true,
+          },
+          locationName: { type: String, required: true },
+          quantity: { type: Number, required: true },
+          stockUpdatedAt: { type: Date, required: true },
+          oldestUnsoldAcquiredAt: { type: Date, default: null },
+          _id: false,
+        },
+      ],
+      default: [],
+    },
+    reprocessingCategory: {
+      type: String,
+      enum: ["ore_ice", "gas", "scrap"],
+      default: null,
+    },
   },
   { timestamps: true },
 );

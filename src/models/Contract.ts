@@ -61,6 +61,8 @@ export interface IContract extends Document {
   validation: IContractValidation;
   buybackQuoteId: string | null;
   buybackDiscrepancy: IContractValidation | null;
+  buyOrderId: string | null;
+  buyOrderDiscrepancy: IContractValidation | null;
 }
 
 const EmbeddedStructureSchema = new Schema<IEmbeddedStructure>(
@@ -142,6 +144,15 @@ const ContractSchema = new Schema<IContract>(
     },
     buybackQuoteId: { type: String, default: null },
     buybackDiscrepancy: {
+      type: {
+        level: { type: String, enum: ["ok", "warning", "fail"], default: null },
+        reasons: { type: [String], default: [] },
+        message: { type: String, default: null },
+      },
+      default: null,
+    },
+    buyOrderId: { type: String, default: null },
+    buyOrderDiscrepancy: {
       type: {
         level: { type: String, enum: ["ok", "warning", "fail"], default: null },
         reasons: { type: [String], default: [] },

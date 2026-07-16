@@ -10,6 +10,10 @@ import { BuybackCategory } from "../models/BuybackCategory";
 import { BuybackItem } from "../models/BuybackItem";
 import { BuybackQuote } from "../models/BuybackQuote";
 import { BuybackLocation } from "../models/BuybackLocation";
+import { BuyOrder } from "../models/BuyOrder";
+import { Structure } from "../models/Structure";
+import { Station } from "../models/Station";
+import { computeAvailableQuantities } from "../services/buyOrder";
 import {
   ensureSystemIsCached,
   getSystemIdByName,
@@ -653,6 +657,50 @@ adminRouter.post("/jump-routes/plan", async (req, res) => {
   }
 });
 
+// Searches the Structure/Station caches (populated reactively by every
+// freight and buyback contract synced so far via getOrFetchStructure) so
+// stock locations can be linked to a real EVE location by picking from
+// already-known names instead of typing a raw ID blind.
+adminRouter.get("/structures/search", async (req, res) => {
+  const q = (req.query.q as string | undefined)?.trim();
+
+  if (!q) {
+    res.status(200).json({ ok: true, data: [] });
+    return;
+  }
+
+  try {
+    const nameFilter = { name: { $regex: q, $options: "i" } };
+
+    const [structures, stations] = await Promise.all([
+      Structure.find({ ...nameFilter, access: "ok" })
+        .select("structureId name systemName")
+        .limit(25),
+      Station.find(nameFilter).select("stationId name systemName").limit(25),
+    ]);
+
+    const results = [
+      ...structures.map((s) => ({
+        id: s.structureId,
+        name: s.name,
+        systemName: s.systemName,
+      })),
+      ...stations.map((s) => ({
+        id: s.stationId,
+        name: s.name,
+        systemName: s.systemName,
+      })),
+    ].slice(0, 25);
+
+    res.status(200).json({ ok: true, data: results });
+  } catch (err) {
+    console.error("Failed to search structures:", err);
+    res
+      .status(500)
+      .json({ ok: false, message: "Failed to search structures", error: err });
+  }
+});
+
 adminRouter.get("/buyback-locations", async (_req, res) => {
   try {
     const locations = await BuybackLocation.find().sort({ name: 1 });
@@ -668,12 +716,28 @@ adminRouter.get("/buyback-locations", async (_req, res) => {
 });
 
 adminRouter.post("/buyback-locations", async (req, res) => {
-  const { name, isHub, distance, pickupRatePerM3 } = req.body;
+  const {
+    name,
+    isHub,
+    distance,
+    pickupRatePerM3,
+    stockLocationId,
+    stockLocationName,
+    stockLocationSystemName,
+  } = req.body;
 
   if (!name || typeof distance !== "number") {
     res.status(400).json({
       ok: false,
       message: "name and distance are required",
+    });
+    return;
+  }
+
+  if (stockLocationId != null && !isHub) {
+    res.status(400).json({
+      ok: false,
+      message: "Stock location can only be set on hub locations",
     });
     return;
   }
@@ -684,6 +748,9 @@ adminRouter.post("/buyback-locations", async (req, res) => {
       isHub: Boolean(isHub),
       distance,
       pickupRatePerM3: pickupRatePerM3 ?? null,
+      stockLocationId: stockLocationId ?? null,
+      stockLocationName: stockLocationName ?? null,
+      stockLocationSystemName: stockLocationSystemName ?? null,
     });
     res.status(200).json({ ok: true, data: location });
   } catch (err) {
@@ -697,12 +764,36 @@ adminRouter.post("/buyback-locations", async (req, res) => {
 });
 
 adminRouter.put("/buyback-locations/:id", async (req, res) => {
-  const { name, isHub, distance, pickupRatePerM3 } = req.body;
+  const {
+    name,
+    isHub,
+    distance,
+    pickupRatePerM3,
+    stockLocationId,
+    stockLocationName,
+    stockLocationSystemName,
+  } = req.body;
+
+  if (stockLocationId != null && !isHub) {
+    res.status(400).json({
+      ok: false,
+      message: "Stock location can only be set on hub locations",
+    });
+    return;
+  }
 
   try {
     const location = await BuybackLocation.findByIdAndUpdate(
       req.params.id,
-      { name, isHub, distance, pickupRatePerM3 },
+      {
+        name,
+        isHub,
+        distance,
+        pickupRatePerM3,
+        stockLocationId,
+        stockLocationName,
+        stockLocationSystemName,
+      },
       { new: true },
     );
 
@@ -919,6 +1010,7 @@ adminRouter.patch("/buyback-items/:id", async (req, res) => {
     acceptedLocationIds,
     recommendationPending,
     dismissedRecommendedRate,
+    reprocessingCategory,
   } = req.body;
 
   try {
@@ -932,6 +1024,7 @@ adminRouter.patch("/buyback-items/:id", async (req, res) => {
         acceptedLocationIds,
         recommendationPending,
         dismissedRecommendedRate,
+        reprocessingCategory,
       },
       { new: true },
     ).populate("categoryId", "name accepted percentOffered");
@@ -974,6 +1067,103 @@ adminRouter.get("/buyback-quotes", async (req, res) => {
       message: "Failed to fetch buyback quotes",
       error: err,
     });
+  }
+});
+
+adminRouter.get("/buyback-stock", async (_req, res) => {
+  try {
+    const items = await BuybackItem.find({
+      "stockByLocation.0": { $exists: true },
+    }).sort({ name: 1 });
+
+    const locationIds = new Set<string>();
+    for (const item of items) {
+      for (const entry of item.stockByLocation) {
+        locationIds.add(String(entry.locationId));
+      }
+    }
+
+    const availableByLocation = new Map<string, Map<number, number>>();
+    for (const locationId of locationIds) {
+      availableByLocation.set(
+        locationId,
+        await computeAvailableQuantities(items, locationId),
+      );
+    }
+
+    const data = items.flatMap((item) =>
+      item.stockByLocation
+        .filter((entry) => entry.quantity > 0)
+        .map((entry) => {
+          const locationKey = String(entry.locationId);
+          return {
+            _id: `${item._id}:${locationKey}`,
+            typeId: item.typeId,
+            name: item.name,
+            locationId: locationKey,
+            locationName: entry.locationName,
+            quantityOnHand: entry.quantity,
+            availableQuantity:
+              availableByLocation.get(locationKey)?.get(item.typeId) ?? 0,
+            stockUpdatedAt: entry.stockUpdatedAt,
+            oldestUnsoldAcquiredAt: entry.oldestUnsoldAcquiredAt,
+          };
+        }),
+    );
+
+    res.status(200).json({ ok: true, data });
+  } catch (err) {
+    console.error("Failed to fetch buyback stock:", err);
+    res
+      .status(500)
+      .json({ ok: false, message: "Failed to fetch buyback stock", error: err });
+  }
+});
+
+adminRouter.get("/buy-orders", async (req, res) => {
+  const status = req.query.status as string | undefined;
+  const filter: Record<string, unknown> = status ? { status } : {};
+
+  try {
+    const orders = await BuyOrder.find(filter).sort({ createdAt: -1 }).limit(200);
+    res.status(200).json({ ok: true, data: orders });
+  } catch (err) {
+    console.error("Failed to fetch buy orders:", err);
+    res
+      .status(500)
+      .json({ ok: false, message: "Failed to fetch buy orders", error: err });
+  }
+});
+
+adminRouter.patch("/buy-orders/:id", async (req, res) => {
+  const { status } = req.body;
+
+  if (!["pending_contract", "contract_created", "completed", "cancelled"].includes(status)) {
+    res.status(400).json({ ok: false, message: "Invalid status" });
+    return;
+  }
+
+  try {
+    const order = await BuyOrder.findByIdAndUpdate(
+      req.params.id,
+      {
+        status,
+        completedAt: status === "completed" ? new Date() : null,
+      },
+      { new: true },
+    );
+
+    if (!order) {
+      res.status(404).json({ ok: false, message: "Buy order not found" });
+      return;
+    }
+
+    res.status(200).json({ ok: true, data: order });
+  } catch (err) {
+    console.error("Failed to update buy order:", err);
+    res
+      .status(500)
+      .json({ ok: false, message: "Failed to update buy order", error: err });
   }
 });
 

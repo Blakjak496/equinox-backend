@@ -12,6 +12,17 @@ export interface IBuybackLocation extends Document {
   // the fee is omitted from quotes entirely), which is always the case for
   // hubs since the items are already there.
   pickupRatePerM3: number | null;
+  // EVE station/structure ID identifying where this location's Division 6
+  // corp hangar (the resale stock hangar) physically is, for corpAssetSync
+  // to poll against. Set by picking from the existing Structure/Station
+  // cache (see admin GET /admin/structures/search) rather than typed in
+  // blind - only locations that actually hold sellable stock need this.
+  stockLocationId: number | null;
+  // Denormalized display copies of the name/system captured at the moment
+  // the admin picked the structure/station from search results - avoids a
+  // second lookup just to render a human-readable label in the admin UI.
+  stockLocationName: string | null;
+  stockLocationSystemName: string | null;
 }
 
 const BuybackLocationSchema = new Schema<IBuybackLocation>(
@@ -20,6 +31,9 @@ const BuybackLocationSchema = new Schema<IBuybackLocation>(
     isHub: { type: Boolean, required: true, default: false },
     distance: { type: Number, required: true },
     pickupRatePerM3: { type: Number, default: null },
+    stockLocationId: { type: Number, default: null },
+    stockLocationName: { type: String, default: null },
+    stockLocationSystemName: { type: String, default: null },
   },
   { timestamps: true },
 );

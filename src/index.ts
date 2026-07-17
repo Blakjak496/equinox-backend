@@ -56,9 +56,11 @@ async function start() {
     updateRecommendedRatesForAllItems();
   });
 
-  // Hourly - Purchase Stock's available quantity is only as fresh as the
-  // last poll, so this runs more often than the once-daily pricing job but
-  // doesn't need contract-sync's 15-minute cadence.
+  // Once daily, same slot as the pricing job - ESI caches corp asset/hangar
+  // contents for 24h, so polling more often than that returns nothing new.
+  // 2pm leaves enough runway for even an extended downtime to clear before
+  // this runs, so stock reflects hangar contents as soon as realistically
+  // possible after each daily reset.
   cron.schedule("0 14 * * *", () => {
     syncCorpAssetStock();
   });

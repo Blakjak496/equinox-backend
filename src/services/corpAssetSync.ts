@@ -67,7 +67,10 @@ async function fetchAllCorpAssets(
 
   const firstRes = await esiFetch(`${baseUrl}&page=1`, token);
   if (!firstRes.ok) {
-    throw new Error(`ESI corp assets failed on page 1: ${firstRes.status}`);
+    const body = await firstRes.text().catch(() => "");
+    throw new Error(
+      `ESI corp assets failed on page 1 for corporationId=${corporationId}: ${firstRes.status} ${body}`,
+    );
   }
 
   const totalPages = Number(firstRes.headers.get("x-pages")) || 1;

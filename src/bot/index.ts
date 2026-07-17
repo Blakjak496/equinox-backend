@@ -185,11 +185,42 @@ app.post("/notify/buy-order", async (req, res) => {
     data.customerCharacterName,
     data.items,
     data.totalPrice,
+    data.status,
+    data.matchedContractId,
   );
 
   const message = await channel.send({ embeds: payload.embeds });
 
   res.json({ ok: true, messageId: message.id });
+});
+
+app.patch("/notify/buy-order", async (req, res) => {
+  const data = { ...req.body };
+  const discordChannelId = process.env.DISCORD_PURCHASE_CHANNEL_ID;
+
+  if (!discordChannelId)
+    throw new Error(
+      "DISCORD_PURCHASE_CHANNEL_ID not set - unable to send purchase order notification",
+    );
+
+  const channel = (await client.channels.fetch(
+    discordChannelId,
+  )) as TextChannel;
+
+  const message = await channel.messages.fetch(data.discordMessageId);
+
+  const payload = buildBuyOrderNotificationPayload(
+    data.referenceId,
+    data.customerCharacterName,
+    data.items,
+    data.totalPrice,
+    data.status,
+    data.matchedContractId,
+  );
+
+  await message.edit({ embeds: payload.embeds });
+
+  res.json({ ok: true });
 });
 
 app.post("/notify/contract/ping", async (req, res) => {

@@ -16,6 +16,7 @@ import {
   notifyContractUpdate,
   notifyNewContract,
   notifyNewBuybackContract,
+  notifyBuyOrderUpdate,
   pingOverdue,
 } from "./discordNotify";
 import { matchBuybackContract, matchBuyOrderContract } from "./buybackContractMatch";
@@ -565,19 +566,33 @@ export async function syncContracts(): Promise<void> {
       // (see BuybackItem.quantityOnHand doc comment) - only cancellation-like
       // terminal states free the reservation.
       if (buyOrderId) {
+        let updatedBuyOrder = null;
         if (esiContract.status === "finished") {
-          await BuyOrder.updateOne(
+          updatedBuyOrder = await BuyOrder.findOneAndUpdate(
             { referenceId: buyOrderId, status: { $ne: "completed" } },
             { status: "completed", completedAt: new Date(), matchedContractId: esiContract.contract_id },
+            { new: true },
           );
         } else if (
           esiContract.status &&
           BUY_ORDER_RELEASE_STATUSES.includes(esiContract.status)
         ) {
-          await BuyOrder.updateOne(
+          updatedBuyOrder = await BuyOrder.findOneAndUpdate(
             { referenceId: buyOrderId, status: { $ne: "completed" } },
             { status: "cancelled" },
+            { new: true },
           );
+        }
+
+        if (updatedBuyOrder) {
+          try {
+            await notifyBuyOrderUpdate(updatedBuyOrder);
+          } catch (err) {
+            console.error(
+              `Failed to update Discord message for buy order ${buyOrderId}:`,
+              err,
+            );
+          }
         }
       }
 

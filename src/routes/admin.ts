@@ -15,6 +15,7 @@ import { Structure } from "../models/Structure";
 import { Station } from "../models/Station";
 import { computeAvailableQuantities } from "../services/buyOrder";
 import { syncCorpAssetStock } from "../services/corpAssetSync";
+import { notifyBuyOrderUpdate } from "../services/discordNotify";
 import { getAccessToken } from "../lib/esiClient";
 import { getOrFetchStructure } from "../utils/structure-utils";
 import {
@@ -1241,6 +1242,15 @@ adminRouter.patch("/buy-orders/:id", async (req, res) => {
     if (!order) {
       res.status(404).json({ ok: false, message: "Buy order not found" });
       return;
+    }
+
+    try {
+      await notifyBuyOrderUpdate(order);
+    } catch (err) {
+      console.error(
+        `Failed to update Discord message for buy order ${order.referenceId}:`,
+        err,
+      );
     }
 
     res.status(200).json({ ok: true, data: order });

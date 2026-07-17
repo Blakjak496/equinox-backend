@@ -192,17 +192,52 @@ export function buildBuybackContractNotificationPayload(
 // Fires at order-creation time, not contract-match time - unlike the
 // buyback notification above, there's no contract yet. This is the ping
 // telling the admin to go create one, titled with referenceId.
+const BUY_ORDER_STATUS_DISPLAY: Record<
+  "pending_contract" | "contract_created" | "completed" | "cancelled",
+  { title: string; color: number; label: string; footer: string }
+> = {
+  pending_contract: {
+    title: "🛒 New Purchase Stock Order",
+    color: embedColors.blue,
+    label: "Awaiting contract",
+    footer:
+      "Create an item_exchange contract to this character with the reference ID in the title",
+  },
+  contract_created: {
+    title: "📦 Purchase Order - Contract Created",
+    color: embedColors.yellow,
+    label: "Contract created",
+    footer: "Awaiting the buyer to accept the contract",
+  },
+  completed: {
+    title: "✅ Purchase Order Completed",
+    color: embedColors.green,
+    label: "Completed",
+    footer: "Contract accepted - order fulfilled",
+  },
+  cancelled: {
+    title: "❌ Purchase Order Cancelled",
+    color: embedColors.grey,
+    label: "Cancelled",
+    footer: "This order's stock reservation has been released",
+  },
+};
+
 export function buildBuyOrderNotificationPayload(
   referenceId: string,
   customerCharacterName: string,
   items: { name: string; quantity: number; unitPrice: number }[],
   totalPrice: number,
+  status: "pending_contract" | "contract_created" | "completed" | "cancelled",
+  matchedContractId: number | null,
 ) {
+  const display = BUY_ORDER_STATUS_DISPLAY[status];
+
   return {
     embeds: [
       {
-        title: "🛒 New Purchase Stock Order",
-        color: embedColors.blue,
+        title: display.title,
+        color: display.color,
         fields: [
           {
             name: "Reference",
@@ -220,6 +255,20 @@ export function buildBuyOrderNotificationPayload(
             inline: true,
           },
           {
+            name: "Status",
+            value: display.label,
+            inline: true,
+          },
+          ...(matchedContractId
+            ? [
+                {
+                  name: "Matched Contract",
+                  value: String(matchedContractId),
+                  inline: true,
+                },
+              ]
+            : []),
+          {
             name: "Items",
             value: items
               .map((item) => `${item.quantity}x ${item.name}`)
@@ -228,7 +277,7 @@ export function buildBuyOrderNotificationPayload(
           },
         ],
         footer: {
-          text: "Create an item_exchange contract to this character with the reference ID in the title",
+          text: display.footer,
         },
         timestamp: new Date().toISOString(),
       },

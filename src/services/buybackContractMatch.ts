@@ -3,6 +3,7 @@ import { IContractValidation } from "../models/Contract";
 import { BuybackQuote } from "../models/BuybackQuote";
 import { BuyOrder } from "../models/BuyOrder";
 import { EsiCorpContract } from "../types/types";
+import { notifyBuyOrderUpdate } from "./discordNotify";
 
 type EsiContractItem = {
   is_included: boolean;
@@ -193,13 +194,25 @@ export async function matchBuyOrderContract(
 
   const ok = reasons.length === 0;
 
-  await BuyOrder.updateOne(
+  const updatedOrder = await BuyOrder.findOneAndUpdate(
     { referenceId, status: "pending_contract" },
     {
       status: "contract_created",
       matchedContractId: contract.contract_id,
     },
+    { new: true },
   );
+
+  if (updatedOrder) {
+    try {
+      await notifyBuyOrderUpdate(updatedOrder);
+    } catch (err) {
+      console.error(
+        `Failed to update Discord message for buy order ${referenceId}:`,
+        err,
+      );
+    }
+  }
 
   return {
     buyOrderId: referenceId,

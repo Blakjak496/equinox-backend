@@ -1,5 +1,5 @@
 import { Contract, IContract } from "../models/Contract";
-import { IBuyOrder } from "../models/BuyOrder";
+import { BuyOrder, IBuyOrder } from "../models/BuyOrder";
 
 export async function notifyNewContract(
   contract: IContract,
@@ -114,15 +114,20 @@ export async function notifyNewBuybackContract(
 }
 
 // Fires right after a BuyOrder is created (order-submission time, not
-// contract-match time) - there's no contract to link a message to yet, so
-// unlike the buyback/contract notifiers above this doesn't persist a
-// discordMessageId anywhere.
-export async function notifyNewBuyOrder(buyOrder: IBuyOrder): Promise<void> {
+// contract-match time). Persists the resulting discordMessageId so later
+// status transitions (contract matched/completed/cancelled, handled by
+// notifyBuyOrderUpdate below) can edit this same message instead of it
+// staying stuck looking like a brand new order forever.
+export async function notifyNewBuyOrder(
+  buyOrder: IBuyOrder,
+): Promise<IBuyOrder | null> {
   const data = {
     referenceId: buyOrder.referenceId,
     customerCharacterName: buyOrder.customerCharacterName,
     items: buyOrder.items,
     totalPrice: buyOrder.totalPrice,
+    status: buyOrder.status,
+    matchedContractId: buyOrder.matchedContractId,
   };
 
   const res = await fetch(
@@ -135,9 +140,51 @@ export async function notifyNewBuyOrder(buyOrder: IBuyOrder): Promise<void> {
   );
 
   const text = await res.text();
-  const json = JSON.parse(text) as { ok: boolean };
+  const json = JSON.parse(text) as { ok: boolean; messageId: string };
 
   if (!json.ok) throw new Error("Failed to ping new buy order");
+
+  return BuyOrder.findOneAndUpdate(
+    { referenceId: buyOrder.referenceId },
+    { discordMessageId: json.messageId },
+    { new: true },
+  );
+}
+
+// Fires on every status transition after creation (contract matched,
+// completed, cancelled - including a manual admin override) to edit the
+// order's original Discord message in place, so it always reflects current
+// state instead of only ever showing "new order".
+export async function notifyBuyOrderUpdate(buyOrder: IBuyOrder): Promise<void> {
+  if (!buyOrder.discordMessageId) {
+    console.warn(
+      `[discordNotify] buy order ${buyOrder.referenceId} has no discordMessageId - skipping status update ping`,
+    );
+    return;
+  }
+
+  const data = {
+    referenceId: buyOrder.referenceId,
+    discordMessageId: buyOrder.discordMessageId,
+    customerCharacterName: buyOrder.customerCharacterName,
+    items: buyOrder.items,
+    totalPrice: buyOrder.totalPrice,
+    status: buyOrder.status,
+    matchedContractId: buyOrder.matchedContractId,
+  };
+
+  const res = await fetch(
+    `http://localhost:${process.env.BOT_PORT}/notify/buy-order`,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    },
+  );
+
+  const json = (await res.json()) as { ok: boolean };
+
+  if (!json.ok) throw new Error("Failed to update buy order Discord message");
 }
 
 export async function pingOverdue(

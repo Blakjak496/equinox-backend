@@ -29,6 +29,10 @@ export interface IBuyOrder extends Document {
   // not Mongo TTL-deleted. Cancelled/expired orders stay visible in the
   // admin list, unlike BuybackQuote's TTL-delete pattern.
   expiresAt: Date;
+  // The Discord message posted at order-creation time - kept so later
+  // status transitions (contract matched/completed/cancelled) can edit that
+  // same message instead of leaving it permanently looking like a new order.
+  discordMessageId: string | null;
 }
 
 const BuyOrderItemSchema = new Schema<IBuyOrderItem>(
@@ -59,6 +63,7 @@ const BuyOrderSchema = new Schema<IBuyOrder>(
     matchedContractId: { type: Number, default: null },
     completedAt: { type: Date, default: null },
     expiresAt: { type: Date, required: true },
+    discordMessageId: { type: String, default: null },
   },
   { timestamps: true },
 );

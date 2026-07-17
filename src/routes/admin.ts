@@ -930,6 +930,7 @@ async function fetchResolvedAcceptedItems(extraMatch: Record<string, unknown> = 
         recommendedRateUpdatedAt: 1,
         recommendationPending: 1,
         dismissedRecommendedRate: 1,
+        reprocessingCategory: 1,
         categoryId: {
           _id: "$category._id",
           name: "$category.name",

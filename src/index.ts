@@ -59,7 +59,7 @@ async function start() {
   // Hourly - Purchase Stock's available quantity is only as fresh as the
   // last poll, so this runs more often than the once-daily pricing job but
   // doesn't need contract-sync's 15-minute cadence.
-  cron.schedule("0 21 * * *", () => {
+  cron.schedule("0 14 * * *", () => {
     syncCorpAssetStock();
   });
 

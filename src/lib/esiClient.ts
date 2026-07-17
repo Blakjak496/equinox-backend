@@ -9,6 +9,16 @@ function tokenIsValid(): boolean {
   return cachedToken !== null && Date.now() < tokenExpiresAt - 60000;
 }
 
+// Call after writing a new refresh token to EsiAuth (a fresh SSO
+// authorization, e.g. to pick up a newly-added scope). Without this, a
+// still-valid cached access token from before the reconnect keeps getting
+// reused - issued under the old scope set - until it naturally expires
+// (up to ~20 min), silently ignoring the new refresh token in the DB.
+export function invalidateAccessTokenCache(): void {
+  cachedToken = null;
+  tokenExpiresAt = 0;
+}
+
 export async function getAccessToken(): Promise<string> {
   if (tokenIsValid()) {
     return cachedToken!;

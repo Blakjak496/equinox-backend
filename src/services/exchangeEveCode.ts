@@ -1,5 +1,6 @@
 import { encrypt } from "../lib/crypto";
 import { EsiAuth } from "../models/EsiAuth";
+import { invalidateAccessTokenCache } from "../lib/esiClient";
 
 function decodeJwtPayload(token: string): any {
   const [, payload] = token.split(".");
@@ -86,6 +87,11 @@ export async function exchangeEveCode(
     },
     { upsert: true, new: true },
   );
+
+  // The new refresh token is useless to callers still holding a cached
+  // access token issued under the old scope set - force the next
+  // getAccessToken() to actually exchange it.
+  invalidateAccessTokenCache();
 
   return { ok: true, characterId: String(characterId), corporationId };
 }

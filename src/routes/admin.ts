@@ -15,6 +15,8 @@ import { Structure } from "../models/Structure";
 import { Station } from "../models/Station";
 import { computeAvailableQuantities } from "../services/buyOrder";
 import { syncCorpAssetStock } from "../services/corpAssetSync";
+import { getAccessToken } from "../lib/esiClient";
+import { getOrFetchStructure } from "../utils/structure-utils";
 import {
   ensureSystemIsCached,
   getSystemIdByName,
@@ -699,6 +701,50 @@ adminRouter.get("/structures/search", async (req, res) => {
     res
       .status(500)
       .json({ ok: false, message: "Failed to search structures", error: err });
+  }
+});
+
+// Fetches a single station/structure directly from ESI by ID and caches it,
+// bypassing the name-based search above. Needed when a structure was
+// destroyed and rebuilt under the same name: the new ID has never appeared
+// on a synced contract, so getOrFetchStructure() has never run for it, and
+// the search route above can only ever surface the stale, now-defunct
+// cached entry under that name.
+adminRouter.post("/structures/fetch", async (req, res) => {
+  const locationId = Number(req.body?.locationId);
+
+  if (!Number.isFinite(locationId) || locationId <= 0) {
+    res
+      .status(400)
+      .json({ ok: false, message: "A valid locationId is required" });
+    return;
+  }
+
+  try {
+    const token = await getAccessToken();
+    const result = await getOrFetchStructure(locationId, token);
+
+    if (!result || ("access" in result && result.access === "forbidden")) {
+      res.status(200).json({
+        ok: false,
+        message:
+          "ESI accepted the ID but denied access to it - the connected character may lack docking rights at this structure.",
+      });
+      return;
+    }
+
+    const id = "structureId" in result ? result.structureId : result.stationId;
+    res.status(200).json({
+      ok: true,
+      data: { id, name: result.name, systemName: result.systemName },
+    });
+  } catch (err) {
+    console.error("Failed to fetch structure by ID:", err);
+    res.status(500).json({
+      ok: false,
+      message: "Failed to fetch structure from ESI",
+      error: err,
+    });
   }
 });
 

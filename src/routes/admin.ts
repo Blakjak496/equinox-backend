@@ -1153,6 +1153,7 @@ adminRouter.get("/buyback-stock", async (_req, res) => {
           const locationKey = String(entry.locationId);
           return {
             _id: `${item._id}:${locationKey}`,
+            itemId: String(item._id),
             typeId: item.typeId,
             name: item.name,
             locationId: locationKey,
@@ -1174,6 +1175,69 @@ adminRouter.get("/buyback-stock", async (_req, res) => {
       .json({ ok: false, message: "Failed to fetch buyback stock", error: err });
   }
 });
+
+// Manual on-hand correction for one item at one location - corpAssetSync
+// only polls once a day (ESI caches hangar contents for 24h), so if
+// something is physically pulled from the hangar outside of a fulfilled
+// Purchase Stock order (used, sold in person, etc.) this lets the admin
+// reflect that immediately instead of leaving stale stock purchasable for
+// up to a day. The next sync overwrites this with real ESI data as usual -
+// this is only a stopgap for the gap between polls, not a standing override.
+adminRouter.patch(
+  "/buyback-stock/:itemId/:locationId",
+  async (req, res) => {
+    const { quantity } = req.body;
+    const { itemId, locationId } = req.params;
+
+    if (
+      typeof quantity !== "number" ||
+      !Number.isFinite(quantity) ||
+      quantity < 0
+    ) {
+      res
+        .status(400)
+        .json({ ok: false, message: "quantity must be a non-negative number" });
+      return;
+    }
+
+    try {
+      const item = await BuybackItem.findById(itemId);
+      if (!item) {
+        res.status(404).json({ ok: false, message: "Item not found" });
+        return;
+      }
+
+      const entry = item.stockByLocation.find(
+        (e) => String(e.locationId) === locationId,
+      );
+      if (!entry) {
+        res.status(404).json({
+          ok: false,
+          message: "No stock entry at this location for this item",
+        });
+        return;
+      }
+
+      const previousQuantity = entry.quantity;
+      entry.quantity = quantity;
+      entry.stockUpdatedAt = new Date();
+      if (previousQuantity === 0 && quantity > 0) {
+        entry.oldestUnsoldAcquiredAt = new Date();
+      } else if (quantity === 0) {
+        entry.oldestUnsoldAcquiredAt = null;
+      }
+
+      await item.save();
+
+      res.status(200).json({ ok: true, data: item });
+    } catch (err) {
+      console.error("Failed to manually update buyback stock:", err);
+      res
+        .status(500)
+        .json({ ok: false, message: "Failed to update stock", error: err });
+    }
+  },
+);
 
 // Manual trigger for the admin's "Run Sync Now" button on the stock page -
 // same underlying function the daily cron calls, just on demand so a fix

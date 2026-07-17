@@ -722,13 +722,19 @@ adminRouter.post("/structures/fetch", async (req, res) => {
 
   try {
     const token = await getAccessToken();
-    const result = await getOrFetchStructure(locationId, token);
+    // Manual admin action - always ask ESI live rather than trusting the
+    // cache. A cached access:"forbidden" doc is otherwise permanent (the
+    // early-return cache-hit path never re-checks ESI), which would
+    // silently make this button useless on any retry.
+    const result = await getOrFetchStructure(locationId, token, {
+      forceRefresh: true,
+    });
 
     if (!result || ("access" in result && result.access === "forbidden")) {
       res.status(200).json({
         ok: false,
         message:
-          "ESI accepted the ID but denied access to it - the connected character may lack docking rights at this structure.",
+          "ESI accepted the ID but returned 403 for it just now. If the connected character definitely has corp roles and the app has esi-universe.read_structures.v1 granted, the most likely explanation is that this specific character has never personally docked at this structure - ESI's docking-access check for a rebuilt structure isn't satisfied just by corp ownership or having assets stored there.",
       });
       return;
     }
@@ -739,11 +745,11 @@ adminRouter.post("/structures/fetch", async (req, res) => {
       data: { id, name: result.name, systemName: result.systemName },
     });
   } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
     console.error("Failed to fetch structure by ID:", err);
     res.status(500).json({
       ok: false,
-      message: "Failed to fetch structure from ESI",
-      error: err,
+      message: `Failed to fetch structure from ESI: ${message}`,
     });
   }
 });

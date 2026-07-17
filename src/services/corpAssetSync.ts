@@ -86,10 +86,23 @@ async function fetchAllCorpAssets(
   return assets;
 }
 
-export async function syncCorpAssetStock(): Promise<void> {
+export type CorpAssetSyncResult =
+  | {
+      ok: true;
+      assetsScanned: number;
+      hubLocationCount: number;
+      itemsChanged: number;
+      itemsTotal: number;
+      durationSec: number;
+    }
+  | { ok: false; reason: "already_running" }
+  | { ok: false; reason: "no_stock_locations" }
+  | { ok: false; reason: "error"; message: string };
+
+export async function syncCorpAssetStock(): Promise<CorpAssetSyncResult> {
   if (running) {
     console.log("[corpAssetSync] already running, skipping this trigger");
-    return;
+    return { ok: false, reason: "already_running" };
   }
   running = true;
   const startedAt = Date.now();
@@ -108,7 +121,7 @@ export async function syncCorpAssetStock(): Promise<void> {
       console.log(
         "[corpAssetSync] no hub BuybackLocation has a stockLocationId set, skipping",
       );
-      return;
+      return { ok: false, reason: "no_stock_locations" };
     }
 
     const locationByStockLocationId = new Map(
@@ -118,11 +131,23 @@ export async function syncCorpAssetStock(): Promise<void> {
       stockLocations.map((loc) => String(loc._id)),
     );
 
-    const token = await getAccessToken();
-    const auth = await EsiAuth.findOne();
-    const corporationId = Number(auth!.corporationId);
-
-    const assets = await fetchAllCorpAssets(corporationId, token);
+    // Anything ESI-related (token refresh, the assets call itself) is the
+    // one part of this run that can genuinely fail at runtime - e.g. a
+    // missing scope or a director losing the corp role needed to read
+    // assets. Caught here (rather than left to throw into an un-awaited
+    // cron callback) so both the cron and the admin's manual trigger get a
+    // clean result back instead of an unhandled rejection.
+    let assets;
+    try {
+      const token = await getAccessToken();
+      const auth = await EsiAuth.findOne();
+      const corporationId = Number(auth!.corporationId);
+      assets = await fetchAllCorpAssets(corporationId, token);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error("[corpAssetSync] failed to fetch corp assets:", err);
+      return { ok: false, reason: "error", message };
+    }
 
     // Bucketed by BuybackLocation._id (as a string) -> typeId -> quantity.
     const quantityByLocationAndType = new Map<string, Map<number, number>>();
@@ -196,10 +221,19 @@ export async function syncCorpAssetStock(): Promise<void> {
       changed++;
     }
 
-    const durationSec = ((Date.now() - startedAt) / 1000).toFixed(1);
+    const durationSec = (Date.now() - startedAt) / 1000;
     console.log(
-      `[corpAssetSync] run complete in ${durationSec}s: ${assets.length} assets scanned across ${stockLocations.length} hub location(s), ${changed}/${items.length} items changed`,
+      `[corpAssetSync] run complete in ${durationSec.toFixed(1)}s: ${assets.length} assets scanned across ${stockLocations.length} hub location(s), ${changed}/${items.length} items changed`,
     );
+
+    return {
+      ok: true,
+      assetsScanned: assets.length,
+      hubLocationCount: stockLocations.length,
+      itemsChanged: changed,
+      itemsTotal: items.length,
+      durationSec,
+    };
   } finally {
     running = false;
   }

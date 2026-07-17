@@ -14,6 +14,7 @@ import { BuyOrder } from "../models/BuyOrder";
 import { Structure } from "../models/Structure";
 import { Station } from "../models/Station";
 import { computeAvailableQuantities } from "../services/buyOrder";
+import { syncCorpAssetStock } from "../services/corpAssetSync";
 import {
   ensureSystemIsCached,
   getSystemIdByName,
@@ -1118,6 +1119,37 @@ adminRouter.get("/buyback-stock", async (_req, res) => {
     res
       .status(500)
       .json({ ok: false, message: "Failed to fetch buyback stock", error: err });
+  }
+});
+
+// Manual trigger for the admin's "Run Sync Now" button on the stock page -
+// same underlying function the daily cron calls, just on demand so a fix
+// (e.g. re-authorizing SSO scopes) can be confirmed without waiting for the
+// next scheduled run.
+adminRouter.post("/buyback-stock/sync", async (_req, res) => {
+  try {
+    const result = await syncCorpAssetStock();
+
+    if (!result.ok) {
+      const messages: Record<string, string> = {
+        already_running: "A sync is already in progress - try again shortly.",
+        no_stock_locations:
+          "No hub location has a stock location configured yet.",
+      };
+      res.status(200).json({
+        ok: false,
+        message:
+          result.reason === "error" ? result.message : messages[result.reason],
+      });
+      return;
+    }
+
+    res.status(200).json({ ok: true, data: result });
+  } catch (err) {
+    console.error("Manual corp asset sync failed:", err);
+    res
+      .status(500)
+      .json({ ok: false, message: "Corp asset sync failed", error: err });
   }
 });
 

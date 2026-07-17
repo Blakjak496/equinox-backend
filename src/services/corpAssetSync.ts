@@ -152,6 +152,49 @@ export async function syncCorpAssetStock(): Promise<CorpAssetSyncResult> {
       return { ok: false, reason: "error", message };
     }
 
+    const items = await BuybackItem.find();
+    const catalogTypeIds = new Set(items.map((item) => item.typeId));
+
+    // Diagnostics: when a run finds nothing, this pinpoints exactly which
+    // filter excluded everything (wrong location_flag, items nested inside
+    // a container so location_id points at the container's item_id instead
+    // of the station, or the type just isn't in the catalog) without
+    // needing a code change to investigate.
+    const flagCounts = new Map<string, number>();
+    for (const asset of assets) {
+      flagCounts.set(
+        asset.location_flag,
+        (flagCounts.get(asset.location_flag) ?? 0) + 1,
+      );
+    }
+    const stockFlagAssets = assets.filter(
+      (asset) => asset.location_flag === STOCK_LOCATION_FLAG,
+    );
+    const atConfiguredLocation = stockFlagAssets.filter((asset) =>
+      locationByStockLocationId.has(asset.location_id),
+    );
+    const inCatalog = atConfiguredLocation.filter((asset) =>
+      catalogTypeIds.has(asset.type_id),
+    );
+    console.log(
+      `[corpAssetSync] diagnostics: location_flag breakdown = ${Array.from(
+        flagCounts.entries(),
+      )
+        .map(([flag, count]) => `${flag}:${count}`)
+        .join(", ")}`,
+    );
+    console.log(
+      `[corpAssetSync] diagnostics: ${stockFlagAssets.length} assets have location_flag=${STOCK_LOCATION_FLAG}, ${atConfiguredLocation.length} of those are at a configured stock location, ${inCatalog.length} of those match a catalog typeId`,
+    );
+    if (stockFlagAssets.length > 0 && atConfiguredLocation.length === 0) {
+      const sampleLocationIds = Array.from(
+        new Set(stockFlagAssets.map((a) => a.location_id)),
+      ).slice(0, 5);
+      console.log(
+        `[corpAssetSync] diagnostics: sample location_id(s) seen on CorpSAG6 assets: ${sampleLocationIds.join(", ")} - configured stockLocationId(s): ${Array.from(locationByStockLocationId.keys()).join(", ")}`,
+      );
+    }
+
     // Bucketed by BuybackLocation._id (as a string) -> typeId -> quantity.
     const quantityByLocationAndType = new Map<string, Map<number, number>>();
     for (const asset of assets) {
@@ -166,7 +209,6 @@ export async function syncCorpAssetStock(): Promise<CorpAssetSyncResult> {
       quantityByLocationAndType.set(locationKey, byType);
     }
 
-    const items = await BuybackItem.find();
     const now = new Date();
     let changed = 0;
 

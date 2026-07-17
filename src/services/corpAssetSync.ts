@@ -26,6 +26,26 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+// Items sitting inside a container or ship that's itself parked in a hangar
+// (rather than loose) report location_id as that container/ship's own
+// item_id, not the station/structure - while location_flag still reflects
+// the parent hangar's flag. Resolving up through the asset tree (climbing
+// via item_id -> location_id until a location_id isn't itself another
+// asset in this same fetch) recovers the true top-level location regardless
+// of nesting depth.
+function resolveTopLevelLocationId(
+  asset: EsiCorpAsset,
+  assetsByItemId: Map<number, EsiCorpAsset>,
+): number {
+  let locationId = asset.location_id;
+  const seen = new Set<number>();
+  while (assetsByItemId.has(locationId) && !seen.has(locationId)) {
+    seen.add(locationId);
+    locationId = assetsByItemId.get(locationId)!.location_id;
+  }
+  return locationId;
+}
+
 async function esiFetch(url: string, token: string, retriesLeft = 3): Promise<Response> {
   const res = await fetch(url, {
     headers: {
@@ -155,11 +175,15 @@ export async function syncCorpAssetStock(): Promise<CorpAssetSyncResult> {
     const items = await BuybackItem.find();
     const catalogTypeIds = new Set(items.map((item) => item.typeId));
 
+    // Every asset in this fetch, keyed by its own item_id - used to resolve
+    // nested items (in a container/ship sitting in the hangar) up to their
+    // true top-level station/structure location.
+    const assetsByItemId = new Map(assets.map((a) => [a.item_id, a]));
+
     // Diagnostics: when a run finds nothing, this pinpoints exactly which
-    // filter excluded everything (wrong location_flag, items nested inside
-    // a container so location_id points at the container's item_id instead
-    // of the station, or the type just isn't in the catalog) without
-    // needing a code change to investigate.
+    // filter excluded everything (wrong location_flag, resolved location not
+    // matching a configured stock location, or the type just isn't in the
+    // catalog) without needing a code change to investigate.
     const flagCounts = new Map<string, number>();
     for (const asset of assets) {
       flagCounts.set(
@@ -171,7 +195,9 @@ export async function syncCorpAssetStock(): Promise<CorpAssetSyncResult> {
       (asset) => asset.location_flag === STOCK_LOCATION_FLAG,
     );
     const atConfiguredLocation = stockFlagAssets.filter((asset) =>
-      locationByStockLocationId.has(asset.location_id),
+      locationByStockLocationId.has(
+        resolveTopLevelLocationId(asset, assetsByItemId),
+      ),
     );
     const inCatalog = atConfiguredLocation.filter((asset) =>
       catalogTypeIds.has(asset.type_id),
@@ -184,11 +210,31 @@ export async function syncCorpAssetStock(): Promise<CorpAssetSyncResult> {
         .join(", ")}`,
     );
     console.log(
-      `[corpAssetSync] diagnostics: ${stockFlagAssets.length} assets have location_flag=${STOCK_LOCATION_FLAG}, ${atConfiguredLocation.length} of those are at a configured stock location, ${inCatalog.length} of those match a catalog typeId`,
+      `[corpAssetSync] diagnostics: ${stockFlagAssets.length} assets have location_flag=${STOCK_LOCATION_FLAG}, ${atConfiguredLocation.length} of those are at a configured stock location (after resolving container/ship nesting), ${inCatalog.length} of those match a catalog typeId`,
     );
     if (stockFlagAssets.length > 0 && atConfiguredLocation.length === 0) {
+      console.log(
+        `[corpAssetSync] diagnostics: raw dump of ${STOCK_LOCATION_FLAG} assets: ${JSON.stringify(
+          stockFlagAssets.map((a) => ({
+            item_id: a.item_id,
+            location_id: a.location_id,
+            location_type: a.location_type,
+            location_flag: a.location_flag,
+            is_singleton: a.is_singleton,
+            type_id: a.type_id,
+            quantity: a.quantity,
+          })),
+        )}`,
+      );
+    }
+    if (stockFlagAssets.length > 0 && atConfiguredLocation.length === 0) {
       const sampleLocationIds = Array.from(
-        new Set(stockFlagAssets.map((a) => a.location_id)),
+        new Set(
+          stockFlagAssets.map(
+            (a) =>
+              `${a.location_id}->resolved:${resolveTopLevelLocationId(a, assetsByItemId)}`,
+          ),
+        ),
       ).slice(0, 5);
       console.log(
         `[corpAssetSync] diagnostics: sample location_id(s) seen on CorpSAG6 assets: ${sampleLocationIds.join(", ")} - configured stockLocationId(s): ${Array.from(locationByStockLocationId.keys()).join(", ")}`,
@@ -199,7 +245,11 @@ export async function syncCorpAssetStock(): Promise<CorpAssetSyncResult> {
     const quantityByLocationAndType = new Map<string, Map<number, number>>();
     for (const asset of assets) {
       if (asset.location_flag !== STOCK_LOCATION_FLAG) continue;
-      const location = locationByStockLocationId.get(asset.location_id);
+      const resolvedLocationId = resolveTopLevelLocationId(
+        asset,
+        assetsByItemId,
+      );
+      const location = locationByStockLocationId.get(resolvedLocationId);
       if (!location) continue;
 
       const locationKey = String(location._id);

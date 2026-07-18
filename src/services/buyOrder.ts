@@ -228,6 +228,20 @@ async function priceCartItems(
     const catalogItem = catalogByTypeId.get(req.typeId)!;
     const yieldResult = yieldByTypeId.get(req.typeId);
 
+    // A 0-quantity line was never added to the appraisal request above (see
+    // addPriceRequest's guard), so there's no price to look up for it - and
+    // none is needed, since 0 units is always worth 0 regardless of price.
+    if (req.quantity <= 0) {
+      pricedItems.push({
+        typeId: req.typeId,
+        name: catalogItem.name,
+        quantity: req.quantity,
+        unitPrice: 0,
+        totalPrice: 0,
+      });
+      continue;
+    }
+
     let totalPrice: number;
     if (!yieldResult) {
       const unitPrice = unitPriceByTypeId.get(req.typeId);

@@ -25,6 +25,8 @@ app.use(
     origin: [
       "https://equinox-galactic-admin.web.app",
       "https://equinox-galactic.web.app",
+      "https://equinoxgalactic.com",
+      "https://www.equinoxgalactic.com",
     ],
   }),
 );

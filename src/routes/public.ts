@@ -2,6 +2,7 @@ import { Router } from "express";
 import { Route } from "../models/Routes";
 import { BuybackLocation } from "../models/BuybackLocation";
 import { BuybackItem } from "../models/BuybackItem";
+import { BuybackCategory, IBuybackCategory } from "../models/BuybackCategory";
 import { Config } from "../models/Config";
 import { runJaniceAppraisal } from "../services/janiceAppraisal";
 import { buildBuybackQuote, INVALID_LOCATION_ERROR } from "../services/buybackQuote";
@@ -194,10 +195,18 @@ publicRouter.get("/stock", async (req, res) => {
       locationId,
     );
 
+    const categoryIds = [...new Set(items.map((item) => String(item.categoryId)))];
+    const categories = await BuybackCategory.find({ _id: { $in: categoryIds } });
+    const categoryById = new Map<string, IBuybackCategory>(
+      categories.map((category) => [String(category._id), category]),
+    );
+
     const data = items
       .map((item) => ({
         typeId: item.typeId,
         name: item.name,
+        categoryName:
+          categoryById.get(String(item.categoryId))?.name ?? "Uncategorised",
         availableQuantity: availableByTypeId.get(item.typeId) ?? 0,
       }))
       .filter((item) => item.availableQuantity > 0);

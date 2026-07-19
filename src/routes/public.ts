@@ -311,7 +311,6 @@ publicRouter.post("/buy", async (req, res) => {
         locationName: result.buyOrder.locationName,
         items: result.buyOrder.items,
         totalPrice: result.buyOrder.totalPrice,
-        expiresAt: result.buyOrder.expiresAt,
       },
     });
   } catch (err) {

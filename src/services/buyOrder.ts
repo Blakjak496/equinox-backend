@@ -10,8 +10,6 @@ import {
   calculateReprocessingYield,
 } from "./reprocessing";
 
-const RESERVATION_HOURS = 48;
-
 type PriceCartError =
   | { ok: false; reason: "empty" }
   | { ok: false; reason: "invalid_location" }
@@ -307,9 +305,6 @@ export async function createBuyOrder(
 
   const orderItems: IBuyOrderItem[] = priced.items;
   const referenceId = generateReferenceId("NOXP");
-  const expiresAt = new Date(
-    Date.now() + RESERVATION_HOURS * 60 * 60 * 1000,
-  );
 
   const buyOrder = await BuyOrder.create({
     referenceId,
@@ -319,7 +314,6 @@ export async function createBuyOrder(
     items: orderItems,
     totalPrice: priced.totalPrice,
     status: "pending_contract",
-    expiresAt,
   });
 
   try {
@@ -329,19 +323,4 @@ export async function createBuyOrder(
   }
 
   return { ok: true, buyOrder };
-}
-
-// Folded into the existing syncContracts cron (every 15 min) rather than a
-// separate schedule - releases the reservation on any order that never got
-// a matching contract created in time. Contract cancellation (a different,
-// faster release path) is handled separately in syncContracts.ts once it
-// actually detects the contract.
-export async function expireStaleBuyOrders(): Promise<void> {
-  const result = await BuyOrder.updateMany(
-    { status: "pending_contract", expiresAt: { $lt: new Date() } },
-    { status: "cancelled" },
-  );
-  if (result.modifiedCount > 0) {
-    console.log(`[buyOrder] expired ${result.modifiedCount} stale buy orders`);
-  }
 }

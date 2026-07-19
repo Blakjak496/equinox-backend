@@ -27,16 +27,12 @@ export interface IBuybackQuote extends Document {
   // denormalized so historical quotes stay readable if the location is
   // later renamed/removed
   locationName: string;
-  // computed rate snapshot at quote time (location distance + live isotope
-  // price), not a stored/editable setting
-  haulingRatePerM3: number;
-  haulingFee: number;
   // per-m3 pickup fee for locations with a pickupRatePerM3 set (scales with
-  // fee-eligible volume, same as haulingFee); 0 when the location has no
-  // pickup service (e.g. hubs)
+  // fee-eligible volume); 0 when the location has no pickup service (e.g.
+  // hubs)
   pickupFee: number;
-  // totalOfferValue - haulingFee - pickupFee; the actual figure the seller
-  // is told to put in the in-game contract
+  // totalOfferValue - pickupFee; the actual figure the seller is told to
+  // put in the in-game contract
   netTotalPrice: number;
   status: "pending_contract" | "matched" | "expired";
   // independent of status - a matched quote's contract can still fail to
@@ -73,8 +69,6 @@ const BuybackQuoteSchema = new Schema<IBuybackQuote>(
     blendedPercent: { type: Number, required: true },
     locationId: { type: String, required: true },
     locationName: { type: String, required: true },
-    haulingRatePerM3: { type: Number, required: true },
-    haulingFee: { type: Number, required: true },
     pickupFee: { type: Number, required: true },
     netTotalPrice: { type: Number, required: true },
     status: {

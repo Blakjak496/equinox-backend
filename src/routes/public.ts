@@ -138,7 +138,6 @@ publicRouter.post("/buyback/quote", async (req, res) => {
         totalJbv: result.totalJbv,
         totalOfferValue: result.totalOfferValue,
         blendedPercent: result.blendedPercent,
-        haulingFee: result.haulingFee,
         pickupFee: result.pickupFee,
         netTotalPrice: result.netTotalPrice,
       },

@@ -4,15 +4,10 @@ import { BuybackLocation } from "../models/BuybackLocation";
 import { BuybackQuote, IBuybackQuoteItem } from "../models/BuybackQuote";
 import { Config } from "../models/Config";
 import { generateReferenceId } from "../utils/reference-id";
-import { getNitrogenIsotopePrice, runJaniceAppraisal } from "./janiceAppraisal";
+import { runJaniceAppraisal } from "./janiceAppraisal";
 
 const CAP_ISK = 20_000_000_000;
 const QUOTE_TTL_DAYS = 30;
-// isotopes consumed per LY - matches the existing hauling calculator's
-// fuelCostPerLY() constant in routeCalculator.ts
-const ISOTOPES_PER_LY = 3000;
-// jump freighter cargo capacity (m³) - the same 375,000 cap used elsewhere
-const JF_CARGO_M3 = 375_000;
 const MARGIN_FLOOR_PERCENT = 5;
 
 export const INVALID_LOCATION_ERROR = "Invalid pickup location";
@@ -25,7 +20,6 @@ export type BuybackQuoteResult =
       totalJbv: number;
       totalOfferValue: number;
       blendedPercent: number;
-      haulingFee: number;
       pickupFee: number;
       netTotalPrice: number;
     }
@@ -42,17 +36,13 @@ export async function buildBuybackQuote(
   const location = await BuybackLocation.findById(locationId);
   if (!location) throw new Error(INVALID_LOCATION_ERROR);
 
-  const [isotopePrice, config, appraisal] = await Promise.all([
-    getNitrogenIsotopePrice(),
+  const [config, appraisal] = await Promise.all([
     Config.findOne(),
     runJaniceAppraisal(itemsText, "buy"),
   ]);
 
   const salesTaxRate = config?.salesTaxRate ?? 0.042;
   const safeCeilingPercent = (1 - salesTaxRate) * 100;
-
-  const haulingRatePerM3 =
-    (location.distance * ISOTOPES_PER_LY * isotopePrice) / JF_CARGO_M3;
 
   const typeIds = appraisal.items.map((item) => item.itemType.eid);
   const buybackItems = await BuybackItem.find({ typeId: { $in: typeIds } });
@@ -169,18 +159,16 @@ export async function buildBuybackQuote(
   );
   const blendedPercent = totalJbv > 0 ? (totalOfferValue / totalJbv) * 100 : 0;
 
-  const haulingFee = haulingRatePerM3 * feeEligibleVolume;
-
   // Per-m3 pickup fee for satellite locations with a pickup service - scales
-  // with the same fee-eligible volume as haulingFee, so a contract that
-  // needs several trips to clear is actually charged for several trips,
-  // rather than a flat one-trip fee regardless of size.
+  // with fee-eligible volume, so a contract that needs several trips to
+  // clear is actually charged for several trips, rather than a flat
+  // one-trip fee regardless of size.
   const pickupFee =
     location.pickupRatePerM3 != null
       ? location.pickupRatePerM3 * feeEligibleVolume
       : 0;
 
-  const netTotalPrice = totalOfferValue - haulingFee - pickupFee;
+  const netTotalPrice = totalOfferValue - pickupFee;
 
   if (netTotalPrice > CAP_ISK) {
     return { ok: false, reason: "cap_exceeded", netTotalPrice };
@@ -199,8 +187,6 @@ export async function buildBuybackQuote(
     blendedPercent,
     locationId,
     locationName: location.name,
-    haulingRatePerM3,
-    haulingFee,
     pickupFee,
     netTotalPrice,
     status: "pending_contract",
@@ -214,7 +200,6 @@ export async function buildBuybackQuote(
     totalJbv,
     totalOfferValue,
     blendedPercent,
-    haulingFee,
     pickupFee,
     netTotalPrice,
   };

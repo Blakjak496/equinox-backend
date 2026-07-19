@@ -1239,6 +1239,80 @@ adminRouter.patch(
   },
 );
 
+// Manually adds (increments) stock for an item that was just physically
+// acquired but hasn't shown up in an ESI poll yet, at a location that may
+// not have a stockByLocation entry for it at all yet (unlike the PATCH
+// route above, which only edits a row already surfaced by GET
+// /buyback-stock). The next corpAssetSync run always wins regardless - it
+// fully overwrites stockByLocation from real ESI data, so this is purely a
+// stopgap for the gap between polls (including the case where everything
+// added here sells out before the next sync ever runs).
+adminRouter.post("/buyback-stock/add", async (req, res) => {
+  const { typeId, locationId, quantity } = req.body;
+
+  if (
+    typeof quantity !== "number" ||
+    !Number.isFinite(quantity) ||
+    quantity <= 0
+  ) {
+    res
+      .status(400)
+      .json({ ok: false, message: "quantity must be a positive number" });
+    return;
+  }
+
+  try {
+    const item = await BuybackItem.findOne({ typeId });
+    if (!item) {
+      res.status(404).json({ ok: false, message: "Item not found" });
+      return;
+    }
+
+    const location = await BuybackLocation.findOne({
+      _id: locationId,
+      isHub: true,
+      stockLocationId: { $ne: null },
+    });
+    if (!location) {
+      res.status(400).json({
+        ok: false,
+        message: "Location is not a valid stock-eligible hub",
+      });
+      return;
+    }
+
+    const entry = item.stockByLocation.find(
+      (e) => String(e.locationId) === locationId,
+    );
+
+    if (entry) {
+      const previousQuantity = entry.quantity;
+      entry.quantity += quantity;
+      entry.stockUpdatedAt = new Date();
+      if (previousQuantity === 0) {
+        entry.oldestUnsoldAcquiredAt = new Date();
+      }
+    } else {
+      item.stockByLocation.push({
+        locationId: location._id,
+        locationName: location.name,
+        quantity,
+        stockUpdatedAt: new Date(),
+        oldestUnsoldAcquiredAt: new Date(),
+      });
+    }
+
+    await item.save();
+
+    res.status(200).json({ ok: true, data: item });
+  } catch (err) {
+    console.error("Failed to manually add buyback stock:", err);
+    res
+      .status(500)
+      .json({ ok: false, message: "Failed to add stock", error: err });
+  }
+});
+
 // Manual trigger for the admin's "Run Sync Now" button on the stock page -
 // same underlying function the daily cron calls, just on demand so a fix
 // (e.g. re-authorizing SSO scopes) can be confirmed without waiting for the

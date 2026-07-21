@@ -28,6 +28,7 @@ import {
   discoverKeepstars,
   KEEPSTAR_TYPE_ID,
 } from "../services/keepstarDiscovery";
+import { METERS_PER_LY } from "../utils/distance-utils";
 
 const adminRouter = Router();
 
@@ -797,9 +798,101 @@ adminRouter.post("/keepstar-routes/plan", async (req, res) => {
       keepstarName: keepstarNameBySystemId.get(entry.systemId) ?? "Unknown",
     }));
 
+    // Map view: not just the route stops, but every system in a padded
+    // bounding box around them, so the admin can see the route in its local
+    // context (and compare against the in-game starmap) rather than a
+    // floating line with nothing around it. Positions are pulled fresh from
+    // System (not Structure) so they match exactly what findJumpPath itself
+    // used for the route math above.
+    const onRouteSystemIds = new Set(fullPath.map((entry) => entry.systemId));
+    const routeSystems = await System.find({
+      systemId: { $in: Array.from(onRouteSystemIds) },
+    });
+
+    // Mongo's $in doesn't preserve array order, so route-order coordinates
+    // (needed to draw the path as a connected line rather than a scatter)
+    // are rebuilt below by mapping fullPath - which IS in true route order
+    // - through this lookup, rather than relying on routeSystems' order.
+    const positionBySystemId = new Map(
+      routeSystems
+        .filter((s) => s.position)
+        .map((s) => [s.systemId, s.position!]),
+    );
+
+    const xsLY = routeSystems
+      .filter((s) => s.position)
+      .map((s) => s.position!.x / METERS_PER_LY);
+    const zsLY = routeSystems
+      .filter((s) => s.position)
+      .map((s) => s.position!.z / METERS_PER_LY);
+
+    // 2D projection uses the x/z plane (dropping y) - the conventional
+    // projection for EVE's starmap, since the galaxy's disc-shaped spread is
+    // dominant on those two axes. Unverified against the in-game map in this
+    // environment - flag it to the admin if the shape looks rotated/mirrored
+    // once viewed, that's a one-line axis swap here, not a rebuild.
+    const rawMinX = Math.min(...xsLY);
+    const rawMaxX = Math.max(...xsLY);
+    const rawMinZ = Math.min(...zsLY);
+    const rawMaxZ = Math.max(...zsLY);
+
+    // A genuine square, not just an independently-padded rectangle: take
+    // the longer of the route's two axis spans, pad it, then center that
+    // single side length on the route's own bounding-box center. Padding
+    // also keeps a very short (or degenerate single-point) route from
+    // collapsing to a zero-size box.
+    const centerX = (rawMinX + rawMaxX) / 2;
+    const centerZ = (rawMinZ + rawMaxZ) / 2;
+    const spanLY = Math.max(rawMaxX - rawMinX, rawMaxZ - rawMinZ, 1);
+    const halfSideLY = spanLY / 2 + Math.max(spanLY * 0.3, 5);
+
+    const bounds = {
+      minX: centerX - halfSideLY,
+      maxX: centerX + halfSideLY,
+      minZ: centerZ - halfSideLY,
+      maxZ: centerZ + halfSideLY,
+    };
+
+    const systemsInView = await System.find({
+      "position.x": {
+        $gte: bounds.minX * METERS_PER_LY,
+        $lte: bounds.maxX * METERS_PER_LY,
+      },
+      "position.z": {
+        $gte: bounds.minZ * METERS_PER_LY,
+        $lte: bounds.maxZ * METERS_PER_LY,
+      },
+    });
+
+    const systemsInViewData = systemsInView
+      .filter((s) => s.position)
+      .map((s) => ({
+        systemId: s.systemId,
+        name: s.name,
+        x: s.position!.x / METERS_PER_LY,
+        z: s.position!.z / METERS_PER_LY,
+        securityStatus: s.securityStatus,
+        isOnRoute: onRouteSystemIds.has(s.systemId),
+        keepstarName: keepstarNameBySystemId.get(s.systemId) ?? null,
+      }));
+
+    const routePath = fullPath
+      .map((entry) => {
+        const position = positionBySystemId.get(entry.systemId);
+        if (!position) return null;
+        return { x: position.x / METERS_PER_LY, z: position.z / METERS_PER_LY };
+      })
+      .filter((p): p is { x: number; z: number } => p !== null);
+
     res.status(200).json({
       ok: true,
-      data: { stops, totalDistanceLY },
+      data: {
+        stops,
+        totalDistanceLY,
+        bounds,
+        systemsInView: systemsInViewData,
+        routePath,
+      },
     });
   } catch (err) {
     console.error("Failed to plan keepstar route:", err);

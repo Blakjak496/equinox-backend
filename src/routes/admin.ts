@@ -24,6 +24,10 @@ import {
 } from "../utils/system-utils";
 import { calculateOptimalRoute } from "../services/routeCalculator";
 import { findJumpPath } from "../services/jumpPathfinder";
+import {
+  discoverKeepstars,
+  KEEPSTAR_TYPE_ID,
+} from "../services/keepstarDiscovery";
 
 const adminRouter = Router();
 
@@ -658,6 +662,152 @@ adminRouter.post("/jump-routes/plan", async (req, res) => {
     res
       .status(500)
       .json({ ok: false, message: "Failed to plan jump route", error: err });
+  }
+});
+
+// ESI has no endpoint that lists "every structure a character can dock at" -
+// this character-scoped search is the closest available mechanism (see
+// keepstarDiscovery.ts doc comment). Its exact query behavior is unverified
+// outside a live server, so this route returns full per-structure detail
+// (not a collapsed summary) for debugging directly in the admin UI.
+adminRouter.post("/keepstar-routes/discover", async (req, res) => {
+  const searchQuery = typeof req.body?.searchQuery === "string"
+    ? req.body.searchQuery
+    : "";
+
+  try {
+    const result = await discoverKeepstars(searchQuery);
+    res.status(200).json({ ok: true, data: result });
+  } catch (err) {
+    console.error("Failed to discover keepstars:", err);
+    res.status(500).json({
+      ok: false,
+      message: err instanceof Error ? err.message : "Failed to discover keepstars",
+      error: err,
+    });
+  }
+});
+
+// The current confirmed allow-list for the Keepstar route planner - every
+// Keepstar discovered so far (via the route above) that resolved with
+// access "ok". Lives entirely off the existing Structure cache; nothing new
+// is persisted for this feature.
+adminRouter.get("/keepstar-routes/known", async (_req, res) => {
+  try {
+    const keepstars = await Structure.find({
+      typeId: KEEPSTAR_TYPE_ID,
+      access: "ok",
+    }).sort({ systemName: 1, name: 1 });
+
+    res.status(200).json({ ok: true, data: keepstars });
+  } catch (err) {
+    console.error("Failed to load known keepstars:", err);
+    res.status(500).json({
+      ok: false,
+      message: "Failed to load known keepstars",
+      error: err,
+    });
+  }
+});
+
+adminRouter.post("/keepstar-routes/plan", async (req, res) => {
+  const { waypointStructureIds, shipCategoryId } = req.body;
+
+  if (
+    !Array.isArray(waypointStructureIds) ||
+    waypointStructureIds.length < 2 ||
+    !shipCategoryId
+  ) {
+    res.status(400).json({
+      ok: false,
+      message:
+        "waypointStructureIds (at least 2) and shipCategoryId are required",
+    });
+    return;
+  }
+
+  try {
+    const shipCategory = await ShipCategory.findById(shipCategoryId);
+    if (!shipCategory) {
+      res.status(404).json({ ok: false, message: "Ship category not found" });
+      return;
+    }
+
+    const knownKeepstars = await Structure.find({
+      typeId: KEEPSTAR_TYPE_ID,
+      access: "ok",
+    });
+
+    const allowedSystemIds = new Set<number>();
+    const keepstarNameBySystemId = new Map<number, string>();
+    for (const keepstar of knownKeepstars) {
+      if (keepstar.systemId === null) continue;
+      allowedSystemIds.add(keepstar.systemId);
+      if (!keepstarNameBySystemId.has(keepstar.systemId)) {
+        keepstarNameBySystemId.set(keepstar.systemId, keepstar.name ?? "Unknown");
+      }
+    }
+
+    const waypointStructures = await Promise.all(
+      waypointStructureIds.map((id: string) =>
+        Structure.findOne({ structureId: Number(id) }),
+      ),
+    );
+
+    const missingIndex = waypointStructures.findIndex(
+      (s) => !s || s.systemId === null,
+    );
+    if (missingIndex !== -1) {
+      res.status(404).json({
+        ok: false,
+        message: `Could not resolve waypoint structure "${waypointStructureIds[missingIndex]}"`,
+      });
+      return;
+    }
+
+    const fullPath: { systemId: number; systemName: string }[] = [
+      {
+        systemId: waypointStructures[0]!.systemId!,
+        systemName: waypointStructures[0]!.systemName ?? "Unknown",
+      },
+    ];
+    let totalDistanceLY = 0;
+
+    for (let i = 0; i < waypointStructures.length - 1; i++) {
+      const leg = findJumpPath(
+        waypointStructures[i]!.systemId!,
+        waypointStructures[i + 1]!.systemId!,
+        shipCategory.jumpRangeLY,
+        allowedSystemIds,
+      );
+
+      if ("error" in leg) {
+        res.status(400).json({ ok: false, message: leg.error });
+        return;
+      }
+
+      for (const system of leg.path.slice(1)) {
+        fullPath.push({ systemId: system.systemId, systemName: system.name });
+      }
+      totalDistanceLY += leg.totalDistanceLY;
+    }
+
+    const stops = fullPath.map((entry) => ({
+      systemName: entry.systemName,
+      keepstarName: keepstarNameBySystemId.get(entry.systemId) ?? "Unknown",
+    }));
+
+    res.status(200).json({
+      ok: true,
+      data: { stops, totalDistanceLY },
+    });
+  } catch (err) {
+    console.error("Failed to plan keepstar route:", err);
+    res.status(500).json({
+      ok: false,
+      message: "Failed to plan keepstar route",
+      error: err,
+    });
   }
 });
 

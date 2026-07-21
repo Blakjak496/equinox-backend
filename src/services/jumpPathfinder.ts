@@ -130,6 +130,7 @@ export function findJumpPath(
   startSystemId: number,
   endSystemId: number,
   jumpRangeLY: number,
+  allowedSystemIds?: Set<number>,
 ): JumpPathResult {
   const allSystems = getCachedSystems();
   const byId = new Map(allSystems.map((s) => [s.systemId, s]));
@@ -163,11 +164,18 @@ export function findJumpPath(
   // Pochven is excluded unconditionally - unlike high-sec there's no
   // "you can depart from it" exception, since normal jump-drive travel
   // doesn't reach it in either direction.
+  //
+  // allowedSystemIds (optional) further restricts which systems can be
+  // landed in - e.g. a Keepstar-only route planner. It needs no start-system
+  // exemption of its own: start is seeded directly into the Dijkstra queue
+  // below regardless of node-set membership, so it's only ever required to
+  // pass this filter when some other hop tries to land back on it.
   const nodes = allSystems.filter(
     (s) =>
       s.position &&
       !isPochven(s) &&
-      (!isHighSec(s) || s.systemId === start.systemId),
+      (!isHighSec(s) || s.systemId === start.systemId) &&
+      (!allowedSystemIds || allowedSystemIds.has(s.systemId)),
   );
 
   const cellSizeMeters = jumpRangeLY * METERS_PER_LY;

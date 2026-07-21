@@ -51,16 +51,26 @@ function parseBudgetResetSeconds(message: string): number | null {
 
 // ESI has no endpoint that lists "every structure a character can dock at" -
 // the closest available mechanism is this character-scoped search, which
-// (per ESI community precedent, unverified in this environment since it
-// requires a live authenticated token) only returns structures that
-// character has already discovered - i.e. exactly what shows in their
-// in-game Structure Browser. Every step here logs its raw result under a
-// [keepstarDiscovery] prefix and returns full per-item detail rather than a
-// collapsed summary, since this is the only way to debug the pipeline
-// without direct server log access.
+// (per ESI community precedent) only returns structures that character has
+// already discovered - i.e. exactly what shows in their in-game Structure
+// Browser. `search` is a required, non-empty parameter - confirmed live
+// against ESI, a blank query 400s ("'search' is required") rather than
+// returning everything, so callers always need a real substring (e.g. a
+// shared naming-convention fragment) and may need multiple runs with
+// different substrings to build up the full known-Keepstar list over time.
+// Every step here logs its raw result under a [keepstarDiscovery] prefix
+// and returns full per-item detail rather than a collapsed summary, since
+// this is the only way to debug the pipeline without direct server log
+// access.
 export async function discoverKeepstars(
   searchQuery: string,
 ): Promise<KeepstarDiscoveryResponse> {
+  if (searchQuery.trim() === "") {
+    throw new Error(
+      "A non-empty search query is required - ESI rejects a blank query outright.",
+    );
+  }
+
   const accessToken = await getAccessToken();
   const auth = await EsiAuth.findOne();
   if (!auth) throw new Error("No ESI auth found. Eve account not connected.");

@@ -29,6 +29,7 @@ import {
   KEEPSTAR_TYPE_ID,
 } from "../services/keepstarDiscovery";
 import { METERS_PER_LY } from "../utils/distance-utils";
+import { ensureRegionIsCached } from "../utils/region-utils";
 
 const adminRouter = Router();
 
@@ -872,9 +873,37 @@ adminRouter.post("/keepstar-routes/plan", async (req, res) => {
         x: s.position!.x / METERS_PER_LY,
         z: s.position!.z / METERS_PER_LY,
         securityStatus: s.securityStatus,
+        regionId: s.regionId,
         isOnRoute: onRouteSystemIds.has(s.systemId),
         keepstarName: keepstarNameBySystemId.get(s.systemId) ?? null,
       }));
+
+    // One label per region actually present in view, positioned at the
+    // centroid of that region's in-view systems (not the region's true
+    // full-universe centroid - we only ever have position data for the
+    // padded box already being shown, and that's the only area this map
+    // needs a label to be meaningful within).
+    const systemIdsByRegionId = new Map<number, { x: number; z: number }[]>();
+    for (const system of systemsInViewData) {
+      if (system.regionId === null) continue;
+      const bucket = systemIdsByRegionId.get(system.regionId);
+      if (bucket) bucket.push({ x: system.x, z: system.z });
+      else systemIdsByRegionId.set(system.regionId, [{ x: system.x, z: system.z }]);
+    }
+
+    const regionEntries = await Promise.all(
+      Array.from(systemIdsByRegionId.entries()).map(async ([regionId, points]) => {
+        const region = await ensureRegionIsCached(regionId);
+        const centroidX = points.reduce((sum, p) => sum + p.x, 0) / points.length;
+        const centroidZ = points.reduce((sum, p) => sum + p.z, 0) / points.length;
+        return {
+          regionId,
+          name: region?.name ?? `Region ${regionId}`,
+          x: centroidX,
+          z: centroidZ,
+        };
+      }),
+    );
 
     const routePath = fullPath
       .map((entry) => {
@@ -892,6 +921,7 @@ adminRouter.post("/keepstar-routes/plan", async (req, res) => {
         bounds,
         systemsInView: systemsInViewData,
         routePath,
+        regions: regionEntries,
       },
     });
   } catch (err) {

@@ -3,6 +3,7 @@ import { Route } from "../models/Routes";
 import { BuybackLocation } from "../models/BuybackLocation";
 import { BuybackItem } from "../models/BuybackItem";
 import { BuybackCategory, IBuybackCategory } from "../models/BuybackCategory";
+import { BuybackGroup, IBuybackGroup } from "../models/BuybackGroup";
 import { Config } from "../models/Config";
 import { runJaniceAppraisal } from "../services/janiceAppraisal";
 import { buildBuybackQuote, INVALID_LOCATION_ERROR } from "../services/buybackQuote";
@@ -134,6 +135,7 @@ publicRouter.post("/buyback/quote", async (req, res) => {
       data: {
         capExceeded: false,
         referenceId: result.referenceId,
+        janiceUrl: result.janiceUrl,
         items: result.items,
         totalJbv: result.totalJbv,
         totalOfferValue: result.totalOfferValue,
@@ -194,20 +196,34 @@ publicRouter.get("/stock", async (req, res) => {
       locationId,
     );
 
-    const categoryIds = [...new Set(items.map((item) => String(item.categoryId)))];
+    const groupIds = [...new Set(items.map((item) => String(item.groupId)))];
+    const groups = await BuybackGroup.find({ _id: { $in: groupIds } });
+    const groupById = new Map<string, IBuybackGroup>(
+      groups.map((group) => [String(group._id), group]),
+    );
+
+    const categoryIds = [
+      ...new Set(groups.map((group) => String(group.categoryId))),
+    ];
     const categories = await BuybackCategory.find({ _id: { $in: categoryIds } });
     const categoryById = new Map<string, IBuybackCategory>(
       categories.map((category) => [String(category._id), category]),
     );
 
     const data = items
-      .map((item) => ({
-        typeId: item.typeId,
-        name: item.name,
-        categoryName:
-          categoryById.get(String(item.categoryId))?.name ?? "Uncategorised",
-        availableQuantity: availableByTypeId.get(item.typeId) ?? 0,
-      }))
+      .map((item) => {
+        const group = groupById.get(String(item.groupId));
+        const category = group
+          ? categoryById.get(String(group.categoryId))
+          : undefined;
+        return {
+          typeId: item.typeId,
+          name: item.name,
+          categoryName: category?.name ?? "Uncategorised",
+          groupName: group?.name ?? "Uncategorised",
+          availableQuantity: availableByTypeId.get(item.typeId) ?? 0,
+        };
+      })
       .filter((item) => item.availableQuantity > 0);
 
     res.status(200).json({ ok: true, data });

@@ -1,4 +1,5 @@
 import { BuybackCategory, IBuybackCategory } from "../models/BuybackCategory";
+import { BuybackGroup, IBuybackGroup } from "../models/BuybackGroup";
 import { BuybackItem, IBuybackItem } from "../models/BuybackItem";
 import { BuybackMarketSnapshot } from "../models/BuybackMarketSnapshot";
 import { Config } from "../models/Config";
@@ -330,10 +331,12 @@ export function calculateRecommendedRate(params: {
 
 function applyRecommendationFlag(
   item: IBuybackItem,
+  group: IBuybackGroup | undefined,
   category: IBuybackCategory | undefined,
   recommendedRate: number,
 ): boolean {
-  const currentActiveRate = item.rateOverride ?? category?.percentOffered ?? 0;
+  const currentActiveRate =
+    item.rateOverride ?? group?.percentOffered ?? category?.percentOffered ?? 0;
   return (
     Math.abs(recommendedRate - currentActiveRate) >
       RECOMMENDATION_FLAG_THRESHOLD_PERCENT &&
@@ -343,6 +346,7 @@ function applyRecommendationFlag(
 
 async function writeRecommendation(
   item: IBuybackItem,
+  group: IBuybackGroup | undefined,
   category: IBuybackCategory | undefined,
   result: {
     recommendedRate: number;
@@ -358,6 +362,7 @@ async function writeRecommendation(
 ): Promise<void> {
   const recommendationPending = applyRecommendationFlag(
     item,
+    group,
     category,
     result.recommendedRate,
   );
@@ -406,12 +411,18 @@ export async function updateRecommendedRatesForAllItems(): Promise<void> {
       categories.map((category) => [String(category._id), category]),
     );
 
+    const groups = await BuybackGroup.find();
+    const groupById = new Map(
+      groups.map((group) => [String(group._id), group]),
+    );
+
     const allItems = await BuybackItem.find().sort({
       recommendedRateUpdatedAt: 1,
     });
     const acceptedItems = allItems.filter((item) => {
-      const category = categoryById.get(String(item.categoryId));
-      const accepted = item.accepted ?? category?.accepted ?? false;
+      const group = groupById.get(String(item.groupId));
+      const category = group ? categoryById.get(String(group.categoryId)) : undefined;
+      const accepted = item.accepted ?? group?.accepted ?? category?.accepted ?? false;
       return accepted;
     });
 
@@ -453,8 +464,10 @@ export async function updateRecommendedRatesForAllItems(): Promise<void> {
 
     for (const item of eligibleItems) {
       try {
-        const category = categoryById.get(String(item.categoryId));
-        const baseRatePercent = item.rateOverride ?? category?.percentOffered ?? 0;
+        const group = groupById.get(String(item.groupId));
+        const category = group ? categoryById.get(String(group.categoryId)) : undefined;
+        const baseRatePercent =
+          item.rateOverride ?? group?.percentOffered ?? category?.percentOffered ?? 0;
         const sActive = sellVolumeByType.get(item.typeId) ?? 0;
         const orders = ordersByType.get(item.typeId) ?? [];
 
@@ -494,7 +507,7 @@ export async function updateRecommendedRatesForAllItems(): Promise<void> {
           salesTaxRate,
         });
 
-        await writeRecommendation(item, category, {
+        await writeRecommendation(item, group, category, {
           recommendedRate: round2(calc.finalOffer * 100),
           packagedVolume,
           avgVolume: history.avgVolume,

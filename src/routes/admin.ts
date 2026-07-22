@@ -7,6 +7,7 @@ import { System } from "../models/System";
 import { MainRoute } from "../models/MainRoute";
 import { ShipCategory } from "../models/ShipCategory";
 import { BuybackCategory } from "../models/BuybackCategory";
+import { BuybackGroup } from "../models/BuybackGroup";
 import { BuybackItem } from "../models/BuybackItem";
 import { BuybackQuote } from "../models/BuybackQuote";
 import { BuybackLocation } from "../models/BuybackLocation";
@@ -1160,12 +1161,16 @@ adminRouter.get("/buyback-categories", async (_req, res) => {
   try {
     const categories = await BuybackCategory.find().sort({ name: 1 });
 
-    // A category is only worth showing if it has at least one item that
-    // isn't confirmed non-tradable - categories with zero items, or where
-    // every item has been flagged nonTradable, are hidden (not deleted -
-    // legitimate items can still be added to them later).
-    const visibleCategoryIds = await BuybackItem.distinct("categoryId", {
+    // A category is only worth showing if it has at least one group with at
+    // least one item that isn't confirmed non-tradable - a genuine 2-hop
+    // check (items -> their group's categoryId), not a shortcut through the
+    // group-level distinct alone, since a category can be indirectly
+    // visible via a group that itself has no *directly* matching items.
+    const visibleGroupIds = await BuybackItem.distinct("groupId", {
       nonTradable: { $ne: true },
+    });
+    const visibleCategoryIds = await BuybackGroup.distinct("categoryId", {
+      _id: { $in: visibleGroupIds },
     });
     const visibleSet = new Set(visibleCategoryIds.map(String));
     const data = categories.filter((category) =>
@@ -1211,28 +1216,107 @@ adminRouter.patch("/buyback-categories/:id", async (req, res) => {
   }
 });
 
-// Every item resolving accepted (item.accepted ?? category.accepted),
-// across all categories, with the owning category populated - used by the
-// pricing page's category tree, which only ever shows accepted items and
-// needs to know up front which categories have any before rendering them.
-// extraMatch lets callers narrow further (e.g. recommendationPending: true)
-// while still guaranteeing the result never includes an item that isn't
-// currently accepted - a pending-recommendation flag on an item the
-// operator doesn't even accept shouldn't show up anywhere actionable.
+adminRouter.get("/buyback-groups", async (req, res) => {
+  const categoryId = req.query.categoryId as string | undefined;
+
+  try {
+    const filter: Record<string, unknown> = {};
+    if (categoryId) filter.categoryId = categoryId;
+
+    const groups = await BuybackGroup.find(filter)
+      .populate("categoryId", "name accepted percentOffered haul acceptedLocationIds")
+      .sort({ name: 1 });
+
+    // Same "has at least one non-nonTradable item" visibility rule the
+    // group level has always used.
+    const visibleGroupIds = await BuybackItem.distinct("groupId", {
+      nonTradable: { $ne: true },
+    });
+    const visibleSet = new Set(visibleGroupIds.map(String));
+    const data = groups.filter((group) => visibleSet.has(String(group._id)));
+
+    res.status(200).json({ ok: true, data });
+  } catch (err) {
+    console.error("Failed to fetch buyback groups:", err);
+    res.status(500).json({
+      ok: false,
+      message: "Failed to fetch buyback groups",
+      error: err,
+    });
+  }
+});
+
+adminRouter.patch("/buyback-groups/:id", async (req, res) => {
+  const { accepted, percentOffered, haul, acceptedLocationIds } = req.body;
+
+  try {
+    const group = await BuybackGroup.findByIdAndUpdate(
+      req.params.id,
+      { accepted, percentOffered, haul, acceptedLocationIds },
+      { new: true },
+    ).populate("categoryId", "name accepted percentOffered haul acceptedLocationIds");
+
+    if (!group) {
+      res.status(404).json({ ok: false, message: "Buyback group not found" });
+      return;
+    }
+
+    res.status(200).json({ ok: true, data: group });
+  } catch (err) {
+    console.error("Failed to update buyback group:", err);
+    res.status(500).json({
+      ok: false,
+      message: "Failed to update buyback group",
+      error: err,
+    });
+  }
+});
+
+// Every item resolving accepted (item.accepted ?? group.accepted ??
+// category.accepted), across all groups, with the owning group (and that
+// group's category) populated - used by the pricing page's category/group
+// tree, which only ever shows accepted items and needs to know up front
+// which groups have any before rendering them. extraMatch lets callers
+// narrow further (e.g. recommendationPending: true) while still guaranteeing
+// the result never includes an item that isn't currently accepted - a
+// pending-recommendation flag on an item the operator doesn't even accept
+// shouldn't show up anywhere actionable.
 async function fetchResolvedAcceptedItems(extraMatch: Record<string, unknown> = {}) {
   return BuybackItem.aggregate([
     {
       $lookup: {
+        from: BuybackGroup.collection.name,
+        localField: "groupId",
+        foreignField: "_id",
+        as: "group",
+      },
+    },
+    { $unwind: "$group" },
+    {
+      $lookup: {
         from: BuybackCategory.collection.name,
-        localField: "categoryId",
+        localField: "group.categoryId",
         foreignField: "_id",
         as: "category",
       },
     },
-    { $unwind: "$category" },
+    // preserveNullAndEmptyArrays: an orphaned group (categoryId points at a
+    // category that no longer exists, or was never linked) degrades to
+    // group-level resolution rather than dropping the item from every list.
+    { $unwind: { path: "$category", preserveNullAndEmptyArrays: true } },
     {
       $match: {
-        $expr: { $eq: [{ $ifNull: ["$accepted", "$category.accepted"] }, true] },
+        $expr: {
+          $eq: [
+            {
+              $ifNull: [
+                "$accepted",
+                { $ifNull: ["$group.accepted", "$category.accepted"] },
+              ],
+            },
+            true,
+          ],
+        },
         nonTradable: { $ne: true },
         ...extraMatch,
       },
@@ -1258,13 +1342,25 @@ async function fetchResolvedAcceptedItems(extraMatch: Record<string, unknown> = 
         recommendationPending: 1,
         dismissedRecommendedRate: 1,
         reprocessingCategory: 1,
-        categoryId: {
-          _id: "$category._id",
-          name: "$category.name",
-          accepted: "$category.accepted",
-          percentOffered: "$category.percentOffered",
-          haul: "$category.haul",
-          acceptedLocationIds: "$category.acceptedLocationIds",
+        groupId: {
+          _id: "$group._id",
+          name: "$group.name",
+          accepted: "$group.accepted",
+          percentOffered: "$group.percentOffered",
+          haul: "$group.haul",
+          acceptedLocationIds: "$group.acceptedLocationIds",
+          // named categoryId (not "category") to match the field name the
+          // plain-populate routes (GET/PATCH /buyback-items without the
+          // accepted=true aggregation path) return, so the frontend can
+          // treat both response shapes identically.
+          categoryId: {
+            _id: "$category._id",
+            name: "$category.name",
+            accepted: "$category.accepted",
+            percentOffered: "$category.percentOffered",
+            haul: "$category.haul",
+            acceptedLocationIds: "$category.acceptedLocationIds",
+          },
         },
       },
     },
@@ -1273,7 +1369,7 @@ async function fetchResolvedAcceptedItems(extraMatch: Record<string, unknown> = 
 
 adminRouter.get("/buyback-items", async (req, res) => {
   const q = req.query.q as string | undefined;
-  const categoryId = req.query.categoryId as string | undefined;
+  const groupId = req.query.groupId as string | undefined;
   const recommendationPending = req.query.recommendationPending as
     | string
     | undefined;
@@ -1301,20 +1397,27 @@ adminRouter.get("/buyback-items", async (req, res) => {
   }
 
   const filter: Record<string, unknown> = { nonTradable: { $ne: true } };
-  if (categoryId) filter.categoryId = categoryId;
+  if (groupId) filter.groupId = groupId;
   if (q && q.length >= 2) {
     const escaped = q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     filter.name = { $regex: escaped, $options: "i" };
   }
 
-  if (!categoryId && !q) {
+  if (!groupId && !q) {
     res.status(200).json({ ok: true, data: [] });
     return;
   }
 
   try {
     const items = await BuybackItem.find(filter)
-      .populate("categoryId", "name accepted percentOffered")
+      .populate({
+        path: "groupId",
+        select: "name accepted percentOffered haul acceptedLocationIds categoryId",
+        populate: {
+          path: "categoryId",
+          select: "name accepted percentOffered haul acceptedLocationIds",
+        },
+      })
       .sort({ name: 1 })
       .limit(200);
 
@@ -1355,7 +1458,14 @@ adminRouter.patch("/buyback-items/:id", async (req, res) => {
         reprocessingCategory,
       },
       { new: true },
-    ).populate("categoryId", "name accepted percentOffered");
+    ).populate({
+      path: "groupId",
+      select: "name accepted percentOffered haul acceptedLocationIds categoryId",
+      populate: {
+        path: "categoryId",
+        select: "name accepted percentOffered haul acceptedLocationIds",
+      },
+    });
 
     if (!item) {
       res.status(404).json({ ok: false, message: "Buyback item not found" });

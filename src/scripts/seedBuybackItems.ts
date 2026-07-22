@@ -1,7 +1,7 @@
 import mongoose from "mongoose";
 import dotenv from "dotenv";
 import { parse } from "csv-parse/sync";
-import { BuybackCategory } from "../models/BuybackCategory";
+import { BuybackGroup } from "../models/BuybackGroup";
 import { BuybackItem } from "../models/BuybackItem";
 
 dotenv.config();
@@ -37,22 +37,22 @@ async function seed() {
   await mongoose.connect(uri);
   console.log("Connected to MongoDB");
 
-  // Run seedBuybackCategories first - items whose group isn't a known
-  // (published) category get skipped rather than left uncategorized.
-  const categories = await BuybackCategory.find().select("groupId _id");
-  const categoryIdByGroup = new Map(
-    categories.map((category) => [category.groupId, category._id]),
+  // Run seedBuybackGroups first - items whose group isn't a known
+  // (published) group get skipped rather than left uncategorized.
+  const groups = await BuybackGroup.find().select("groupId _id");
+  const groupIdByEveId = new Map(
+    groups.map((group) => [group.groupId, group._id]),
   );
 
   let skipped = 0;
   const operations = publishedRows.flatMap((row) => {
-    const categoryId = categoryIdByGroup.get(Number(row.groupID));
-    if (!categoryId) {
+    const groupId = groupIdByEveId.get(Number(row.groupID));
+    if (!groupId) {
       skipped++;
       return [];
     }
 
-    // name/categoryId are kept in sync on every run; all admin-editable
+    // name/groupId are kept in sync on every run; all admin-editable
     // fields are only set on first insert so this stays safe to re-run
     // without clobbering admin edits.
     return [
@@ -63,7 +63,7 @@ async function seed() {
             $set: {
               typeId: Number(row.typeID),
               name: row.typeName,
-              categoryId,
+              groupId,
             },
             $setOnInsert: {
               accepted: null,

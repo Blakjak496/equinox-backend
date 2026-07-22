@@ -1,5 +1,6 @@
 import express from "express";
 import dotenv from "dotenv";
+import mongoose from "mongoose";
 import { connectDB } from "./lib/db";
 import cron from "node-cron";
 import { syncContracts } from "./services/syncContracts";
@@ -12,6 +13,7 @@ import cors from "cors";
 import { adminAuth } from "./lib/adminAuth";
 import adminRouter from "./routes/admin";
 import publicRouter from "./routes/public";
+import { BuybackGroup } from "./models/BuybackGroup";
 
 dotenv.config();
 
@@ -37,9 +39,41 @@ app.get("/equinox/health", (req, res) => {
   res.json({ status: "ok" });
 });
 
+// Guards against the buyback Category/Group/Item migration running out of
+// order (e.g. this code deployed and started before the collection rename
+// + category link scripts have run) - fails loudly at boot instead of
+// silently serving quotes that can never resolve group-level settings.
+async function assertBuybackMigrationComplete() {
+  const db = mongoose.connection.db;
+  if (!db) throw new Error("No active database connection");
+
+  const collectionNames = new Set(
+    (await db.listCollections().toArray()).map((c) => c.name),
+  );
+  if (!collectionNames.has("buybackgroups")) {
+    throw new Error(
+      "buybackgroups collection not found - run migrate:rename-group-collection before starting this version of the backend.",
+    );
+  }
+
+  const groupCount = await BuybackGroup.countDocuments();
+  if (groupCount > 0) {
+    const linkedCount = await BuybackGroup.countDocuments({
+      categoryId: { $ne: null },
+    });
+    if (linkedCount === 0) {
+      throw new Error(
+        "No BuybackGroup documents have a categoryId link - run seed:buyback-categories then seed:buyback-groups before starting this version of the backend.",
+      );
+    }
+  }
+}
+
 async function start() {
   await connectDB();
   console.log("Connected to MongoDB");
+
+  await assertBuybackMigrationComplete();
 
   await initConfig();
   await initSystemCache();

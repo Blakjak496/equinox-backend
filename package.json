@@ -11,7 +11,10 @@
     "seed:config": "ts-node src/scripts/seedConfig.ts",
     "seed:systems": "ts-node src/scripts/seedSystems.ts",
     "seed:buyback-categories": "ts-node src/scripts/seedBuybackCategories.ts",
+    "seed:buyback-groups": "ts-node src/scripts/seedBuybackGroups.ts",
     "seed:buyback-items": "ts-node src/scripts/seedBuybackItems.ts",
+    "migrate:rename-group-collection": "ts-node src/scripts/migrateRenameGroupCollection.ts",
+    "migrate:rename-item-group-field": "ts-node src/scripts/migrateRenameItemGroupField.ts",
     "pricing:run": "ts-node src/scripts/runPricingRecommendationBatch.ts",
     "haul:reset": "ts-node src/scripts/resetHaulFlags.ts",
     "reprocessing:import": "ts-node src/scripts/importReprocessingData.ts"

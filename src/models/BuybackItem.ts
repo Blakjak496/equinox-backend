@@ -15,13 +15,13 @@ export interface IBuybackItemHistoryEntry {
 export interface IBuybackItem extends Document {
   typeId: number;
   name: string;
-  categoryId: Types.ObjectId;
-  // null means "inherit from category" - explicit true/false overrides it
+  groupId: Types.ObjectId;
+  // null means "inherit from group" - explicit true/false overrides it
   accepted: boolean | null;
-  // null means "inherit from category rate"
+  // null means "inherit from group rate"
   rateOverride: number | null;
   notes: string | null;
-  // null means "inherit from category" for both of these
+  // null means "inherit from group" for both of these
   haul: boolean | null;
   acceptedLocationIds: string[] | null;
   // static SDE data, fetched once and cached permanently (never refreshed)
@@ -86,9 +86,9 @@ const BuybackItemSchema = new Schema<IBuybackItem>(
   {
     typeId: { type: Number, required: true, unique: true },
     name: { type: String, required: true, index: true },
-    categoryId: {
+    groupId: {
       type: Schema.Types.ObjectId,
-      ref: "BuybackCategory",
+      ref: "BuybackGroup",
       required: true,
       index: true,
     },

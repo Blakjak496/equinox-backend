@@ -5,12 +5,11 @@ import { BuybackCategory } from "../models/BuybackCategory";
 
 dotenv.config();
 
-const SDE_URL = "https://www.fuzzwork.co.uk/dump/latest/csv/invGroups.csv";
+const SDE_URL = "https://www.fuzzwork.co.uk/dump/latest/csv/invCategories.csv";
 
 type SdeRow = {
-  groupID: string;
   categoryID: string;
-  groupName: string;
+  categoryName: string;
   published: string;
 };
 
@@ -32,7 +31,7 @@ async function seed() {
 
   const publishedRows = rows.filter((row) => row.published === "1");
   console.log(
-    `Parsed ${rows.length} groups (${publishedRows.length} published)`,
+    `Parsed ${rows.length} categories (${publishedRows.length} published)`,
   );
 
   await mongoose.connect(uri);
@@ -43,9 +42,9 @@ async function seed() {
   // admin edits.
   const operations = publishedRows.map((row) => ({
     updateOne: {
-      filter: { groupId: Number(row.groupID) },
+      filter: { categoryId: Number(row.categoryID) },
       update: {
-        $set: { groupId: Number(row.groupID), name: row.groupName },
+        $set: { categoryId: Number(row.categoryID), name: row.categoryName },
         $setOnInsert: {
           accepted: false,
           percentOffered: 0,

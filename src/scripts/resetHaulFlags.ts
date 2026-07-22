@@ -1,16 +1,16 @@
 import mongoose from "mongoose";
 import dotenv from "dotenv";
-import { BuybackCategory } from "../models/BuybackCategory";
+import { BuybackGroup } from "../models/BuybackGroup";
 import { BuybackItem } from "../models/BuybackItem";
 
 dotenv.config();
 
 // One-off cleanup: haul is meant to be an edge-case override ("this
 // specific thing sells better locally"), but nearly everything ended up
-// haul=false, forcing a manual re-check on almost every category/item. This
-// resets every category to haul=true and clears every item-level override
+// haul=false, forcing a manual re-check on almost every group/item. This
+// resets every group to haul=true and clears every item-level override
 // back to null (inherit), so haul=false becomes the rare deliberate
-// exception it was always supposed to be - and a category-level change
+// exception it was always supposed to be - and a group-level change
 // still cascades to every item that hasn't been individually overridden.
 async function run() {
   const uri = process.env.MONGODB_URI;
@@ -19,9 +19,9 @@ async function run() {
   await mongoose.connect(uri);
   console.log("Connected to MongoDB");
 
-  const categoryResult = await BuybackCategory.updateMany({}, { haul: true });
+  const groupResult = await BuybackGroup.updateMany({}, { haul: true });
   console.log(
-    `Categories: ${categoryResult.modifiedCount}/${categoryResult.matchedCount} set to haul=true`,
+    `Groups: ${groupResult.modifiedCount}/${groupResult.matchedCount} set to haul=true`,
   );
 
   const itemResult = await BuybackItem.updateMany(

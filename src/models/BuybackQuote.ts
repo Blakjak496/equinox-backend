@@ -7,8 +7,9 @@ export interface IBuybackQuoteItem {
   quantity: number;
   jbvPerUnit: number;
   totalJbv: number;
-  // unitVolume * quantity - computed from Janice's item data regardless of
-  // whether the item is recognised/accepted
+  // unitVolume * quantity, sourced from ESI (cached on BuybackItem) - only
+  // populated once an item has cleared every accept/location check, so
+  // it's 0 for anything rejected before that point (see buybackQuote.ts)
   volume: number;
   percentOffered: number;
   offerValue: number;
@@ -18,7 +19,15 @@ export interface IBuybackQuoteItem {
 
 export interface IBuybackQuote extends Document {
   referenceId: string;
+  // Points at the single Janice appraisal, scoped to only the accepted
+  // items (null if nothing was accepted) - item identification and
+  // accept/reject resolution both happen locally, before Janice is ever
+  // called, so it never sees anything that isn't already accepted.
+  janiceUrl: string | null;
   items: IBuybackQuoteItem[];
+  // accepted items only - sourced from the same appraisal janiceUrl points
+  // at, not a sum of the per-item totalJbv values above (which cover every
+  // submitted item, accepted or not)
   totalJbv: number;
   // gross, pre-fee sum of accepted item offer values
   totalOfferValue: number;
@@ -63,6 +72,7 @@ const BuybackQuoteItemSchema = new Schema<IBuybackQuoteItem>(
 const BuybackQuoteSchema = new Schema<IBuybackQuote>(
   {
     referenceId: { type: String, required: true, unique: true },
+    janiceUrl: { type: String, default: null },
     items: { type: [BuybackQuoteItemSchema], default: [] },
     totalJbv: { type: Number, required: true },
     totalOfferValue: { type: Number, required: true },

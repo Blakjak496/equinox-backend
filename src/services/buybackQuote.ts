@@ -11,9 +11,13 @@ import { runJaniceAppraisal, buildJaniceUrl } from "./janiceAppraisal";
 
 const CAP_ISK = 20_000_000_000;
 const QUOTE_TTL_DAYS = 30;
-const MARGIN_FLOOR_PERCENT = 5;
+const DEFAULT_MARGIN_FLOOR_PERCENT = 5;
 
 export const INVALID_LOCATION_ERROR = "Invalid pickup location";
+
+function round2(value: number): number {
+  return Math.round(value * 100) / 100;
+}
 
 export type BuybackQuoteResult =
   | {
@@ -63,6 +67,8 @@ export async function buildBuybackQuote(
   const config = await Config.findOne();
   const salesTaxRate = config?.salesTaxRate ?? 0.042;
   const safeCeilingPercent = (1 - salesTaxRate) * 100;
+  const marginFloorPercent =
+    config?.marginFloorPercent ?? DEFAULT_MARGIN_FLOOR_PERCENT;
 
   const parsedLines = parseItemsText(itemsText);
 
@@ -210,9 +216,12 @@ export async function buildBuybackQuote(
     // Downward-only safety net, applied to every item: catches any rate -
     // manually set, inherited, or just stale - that no longer clears the
     // minimum margin after tax because JBV shifted since it was last set.
+    // Rounded immediately - safeCeilingPercent is derived from a tax rate
+    // fraction (e.g. 0.0337), and subtracting from it lands on values like
+    // 91.63000000000001 without this.
     let finalPercent = basePercent;
-    if (safeCeilingPercent - basePercent < MARGIN_FLOOR_PERCENT) {
-      finalPercent = safeCeilingPercent - MARGIN_FLOOR_PERCENT;
+    if (safeCeilingPercent - basePercent < marginFloorPercent) {
+      finalPercent = round2(safeCeilingPercent - marginFloorPercent);
     }
 
     const haul = buybackItem.haul ?? group?.haul ?? category?.haul ?? true;
@@ -300,7 +309,8 @@ export async function buildBuybackQuote(
     (sum, item) => sum + item.offerValue,
     0,
   );
-  const blendedPercent = totalJbv > 0 ? (totalOfferValue / totalJbv) * 100 : 0;
+  const blendedPercent =
+    totalJbv > 0 ? round2((totalOfferValue / totalJbv) * 100) : 0;
 
   // Per-m3 pickup fee for satellite locations with a pickup service - scales
   // with fee-eligible volume, so a contract that needs several trips to

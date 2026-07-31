@@ -167,6 +167,36 @@ app.post("/notify/buyback-contract", async (req, res) => {
   res.json({ ok: true, messageId: message.id });
 });
 
+app.patch("/notify/buyback-contract", async (req, res) => {
+  const data = { ...req.body };
+  const discordChannelId = process.env.DISCORD_BUYBACK_CHANNEL_ID;
+
+  if (!discordChannelId)
+    throw new Error(
+      "DISCORD_BUYBACK_CHANNEL_ID not set - unable to update buyback contract notification",
+    );
+
+  const channel = (await client.channels.fetch(
+    discordChannelId,
+  )) as TextChannel;
+
+  const message = await channel.messages.fetch(data.discordMessageId);
+
+  const payload = buildBuybackContractNotificationPayload(
+    data.contractId,
+    data.price,
+    data.status,
+    data.pickupLocation,
+    data.acceptedByName,
+    data.buybackQuoteId,
+    data.buybackDiscrepancy,
+  );
+
+  await message.edit({ embeds: payload.embeds });
+
+  res.json({ ok: true });
+});
+
 app.post("/notify/buy-order", async (req, res) => {
   const data = { ...req.body };
   const discordChannelId = process.env.DISCORD_PURCHASE_CHANNEL_ID;

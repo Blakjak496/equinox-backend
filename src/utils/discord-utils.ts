@@ -7,6 +7,50 @@ const embedColors = {
   grey: 0x747f8d,
 };
 
+// Raw ESI/internal enum values (both contract status and discrepancy
+// reason codes) are meant for code, not for reading in a Discord embed -
+// this maps each known value to a human-friendly label. Falls back to the
+// raw value itself for anything unrecognised, so a new/unexpected value
+// still shows up instead of silently disappearing.
+const CONTRACT_STATUS_LABELS: Record<string, string> = {
+  outstanding: "Outstanding",
+  in_progress: "In Progress",
+  finished_issuer: "Finished (Issuer)",
+  finished_contractor: "Finished (Contractor)",
+  finished: "Finished",
+  cancelled: "Cancelled",
+  rejected: "Rejected",
+  failed: "Failed",
+  deleted: "Deleted",
+  reversed: "Reversed",
+};
+
+function formatContractStatus(status: string | null): string {
+  if (!status) return "Unknown";
+  return CONTRACT_STATUS_LABELS[status] ?? status;
+}
+
+const DISCREPANCY_REASON_LABELS: Record<string, string> = {
+  value_mismatch: "Value mismatch",
+  no_reference: "No reference found",
+  quote_not_found: "Quote not found",
+  order_not_found: "Order not found",
+  match_error: "Match error",
+};
+
+// Item reasons carry a raw EVE typeId ("missing_item:34") rather than a
+// name - no item catalogue lookup is available at this point in the
+// pipeline (see the equivalent admin-frontend formatter for the same
+// tradeoff), so the typeId is kept rather than guessed at.
+function formatDiscrepancyReason(reason: string): string {
+  if (DISCREPANCY_REASON_LABELS[reason]) return DISCREPANCY_REASON_LABELS[reason];
+  const missing = reason.match(/^missing_item:(\d+)$/);
+  if (missing) return `Missing item (type ${missing[1]})`;
+  const extra = reason.match(/^extra_item:(\d+)$/);
+  if (extra) return `Extra item (type ${extra[1]})`;
+  return reason;
+}
+
 function getEmbedColor(
   isOverdue: boolean,
   status:
@@ -96,7 +140,7 @@ export function buildContractNotificationPayload(
           },
           {
             name: "Status",
-            value: status || "Unknown",
+            value: formatContractStatus(status),
             inline: true,
           },
           {
@@ -161,7 +205,7 @@ export function buildBuybackContractNotificationPayload(
           },
           {
             name: "Status",
-            value: status || "Unknown",
+            value: formatContractStatus(status),
             inline: true,
           },
           {
@@ -170,7 +214,7 @@ export function buildBuybackContractNotificationPayload(
               level === "ok"
                 ? "✅ Matches quote"
                 : level
-                  ? `⚠️ ${buybackDiscrepancy?.reasons.join(", ") || "Discrepancy"}`
+                  ? `⚠️ ${buybackDiscrepancy?.reasons.map(formatDiscrepancyReason).join(", ") || "Discrepancy"}`
                   : "—",
             inline: true,
           },

@@ -113,6 +113,47 @@ export async function notifyNewBuybackContract(
   );
 }
 
+// Fires on every status transition after creation (contract accepted,
+// completed, etc.) to edit the buyback contract's original Discord message
+// in place - mirrors notifyContractUpdate above and notifyBuyOrderUpdate
+// below. Without this, notifyNewBuybackContract only ever fires once (on
+// first sync, while the contract is still "outstanding"), so the message
+// would otherwise be permanently stuck showing that first-seen state.
+export async function notifyBuybackContractUpdate(
+  contract: IContract,
+): Promise<void> {
+  if (!contract.discordMessageId) {
+    console.warn(
+      `[discordNotify] buyback contract ${contract.contractId} has no discordMessageId - skipping status update ping`,
+    );
+    return;
+  }
+
+  const data = {
+    contractId: contract.contractId,
+    discordMessageId: contract.discordMessageId,
+    price: contract.price ?? 0,
+    status: contract.status,
+    pickupLocation: contract.pickupStructure?.name ?? null,
+    acceptedByName: contract.acceptedByName,
+    buybackQuoteId: contract.buybackQuoteId,
+    buybackDiscrepancy: contract.buybackDiscrepancy,
+  };
+
+  const res = await fetch(
+    `http://localhost:${process.env.BOT_PORT}/notify/buyback-contract`,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    },
+  );
+
+  const json = (await res.json()) as { ok: boolean };
+
+  if (!json.ok) throw new Error("Failed to update buyback contract Discord message");
+}
+
 // Fires right after a BuyOrder is created (order-submission time, not
 // contract-match time). Persists the resulting discordMessageId so later
 // status transitions (contract matched/completed/cancelled, handled by

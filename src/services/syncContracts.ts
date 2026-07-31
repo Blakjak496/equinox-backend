@@ -16,6 +16,7 @@ import {
   notifyContractUpdate,
   notifyNewContract,
   notifyNewBuybackContract,
+  notifyBuybackContractUpdate,
   notifyBuyOrderUpdate,
   pingOverdue,
 } from "./discordNotify";
@@ -454,6 +455,15 @@ export async function syncContracts(): Promise<void> {
         } catch (err) {
           console.log(
             "Something went wrong while sending the new buyback contract notification: ",
+            err,
+          );
+        }
+      } else if (statusChanged) {
+        try {
+          await notifyBuybackContractUpdate(updatedContract);
+        } catch (err) {
+          console.log(
+            "Something went wrong while updating the buyback contract notification: ",
             err,
           );
         }

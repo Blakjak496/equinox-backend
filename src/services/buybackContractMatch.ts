@@ -18,6 +18,16 @@ export type BuybackMatchResult = {
 
 const REFERENCE_PATTERN = /NOXC-[0-9A-Z]{6}-[0-9A-Z]{6}/;
 
+// ESI's contract.price and our own computed totals are both doubles built
+// from independent chains of arithmetic (game-side vs. buybackQuote.ts's
+// pricing pipeline) - comparing them with strict !== flags a discrepancy on
+// sub-cent float noise even when the two ISK amounts are identical to the
+// player. Compare at whole-cent resolution instead, which is the finest
+// precision either side is ever meaningfully set to.
+function pricesMatch(a: number, b: number): boolean {
+  return Math.round(a * 100) === Math.round(b * 100);
+}
+
 export async function matchBuybackContract(
   contract: EsiCorpContract,
   corporationId: number,
@@ -85,7 +95,7 @@ export async function matchBuybackContract(
     if (contractQty > quotedQty) reasons.push(`extra_item:${typeId}`);
   }
 
-  if (contract.price !== quote.netTotalPrice) {
+  if (!pricesMatch(contract.price, quote.netTotalPrice)) {
     reasons.push("value_mismatch");
   }
 
@@ -96,6 +106,8 @@ export async function matchBuybackContract(
     {
       status: "matched",
       discrepancy: !ok,
+      discrepancyReasons: reasons,
+      matchedContractPrice: contract.price,
       matchedContractId: contract.contract_id,
     },
   );
@@ -188,7 +200,7 @@ export async function matchBuyOrderContract(
     if (contractQty > orderedQty) reasons.push(`extra_item:${typeId}`);
   }
 
-  if (contract.price !== order.totalPrice) {
+  if (!pricesMatch(contract.price, order.totalPrice)) {
     reasons.push("value_mismatch");
   }
 

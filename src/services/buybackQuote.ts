@@ -305,9 +305,15 @@ export async function buildBuybackQuote(
   // rejected immediately or filled in once Janice priced it.
   const quoteItems = quoteItemsByIndex as IBuybackQuoteItem[];
 
-  const totalOfferValue = quoteItems.reduce(
-    (sum, item) => sum + item.offerValue,
-    0,
+  // Rounded immediately, same reasoning as finalPercent above - a chain of
+  // per-item multiplications/divisions lands on values like
+  // 1234567.8900000001, and that noise would otherwise propagate into
+  // netTotalPrice below and cause it to never exactly equal the contract
+  // price a player actually typed in-game, permanently false-flagging every
+  // matched contract as a discrepancy even when the numbers are identical
+  // to the ISK.
+  const totalOfferValue = round2(
+    quoteItems.reduce((sum, item) => sum + item.offerValue, 0),
   );
   const blendedPercent =
     totalJbv > 0 ? round2((totalOfferValue / totalJbv) * 100) : 0;
@@ -316,12 +322,13 @@ export async function buildBuybackQuote(
   // with fee-eligible volume, so a contract that needs several trips to
   // clear is actually charged for several trips, rather than a flat
   // one-trip fee regardless of size.
-  const pickupFee =
+  const pickupFee = round2(
     location.pickupRatePerM3 != null
       ? location.pickupRatePerM3 * feeEligibleVolume
-      : 0;
+      : 0,
+  );
 
-  const netTotalPrice = totalOfferValue - pickupFee;
+  const netTotalPrice = round2(totalOfferValue - pickupFee);
 
   if (netTotalPrice > CAP_ISK) {
     return { ok: false, reason: "cap_exceeded", netTotalPrice };

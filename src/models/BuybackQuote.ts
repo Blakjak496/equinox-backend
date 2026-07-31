@@ -48,6 +48,15 @@ export interface IBuybackQuote extends Document {
   // reconcile (wrong items/value), which is a property of the match, not
   // a different lifecycle stage
   discrepancy: boolean;
+  // Specific cause codes behind `discrepancy` (e.g. "value_mismatch",
+  // "missing_item:34") - set by matchBuybackContract() alongside
+  // `discrepancy` itself, so the admin can see *why* a match was flagged
+  // instead of just that it was. Empty when discrepancy is false.
+  discrepancyReasons: string[];
+  // The matched contract's own price at match time, for displaying next to
+  // netTotalPrice above so a value_mismatch is visually obvious rather than
+  // requiring a separate contract lookup.
+  matchedContractPrice: number | null;
   matchedContractId: number | null;
   expiresAt: Date;
 }
@@ -88,6 +97,8 @@ const BuybackQuoteSchema = new Schema<IBuybackQuote>(
       default: "pending_contract",
     },
     discrepancy: { type: Boolean, required: true, default: false },
+    discrepancyReasons: { type: [String], default: [] },
+    matchedContractPrice: { type: Number, default: null },
     matchedContractId: { type: Number, default: null },
     // TTL index: document is purged once the current time passes expiresAt
     expiresAt: { type: Date, required: true },

@@ -10,6 +10,15 @@ import {
   calculateReprocessingYield,
 } from "./reprocessing";
 
+// Same reasoning as buybackQuote.ts's round2 - unrounded chains of
+// multiplication/division here would otherwise let float noise (e.g.
+// 1234567.8900000001) propagate into the stored totalPrice, which
+// buybackContractMatch.ts compares directly against the contract price a
+// player typed in-game.
+function round2(value: number): number {
+  return Math.round(value * 100) / 100;
+}
+
 type PriceCartError =
   | { ok: false; reason: "empty" }
   | { ok: false; reason: "invalid_location" }
@@ -270,16 +279,24 @@ async function priceCartItems(
       totalPrice = materialsValue + remainderValue;
     }
 
+    totalPrice = round2(totalPrice);
+
     pricedItems.push({
       typeId: req.typeId,
       name: catalogItem.name,
       quantity: req.quantity,
-      unitPrice: totalPrice / req.quantity,
+      unitPrice: round2(totalPrice / req.quantity),
       totalPrice,
     });
   }
 
-  const totalPrice = pricedItems.reduce((sum, item) => sum + item.totalPrice, 0);
+  // Rounded again here, not just per-item above - summing already-rounded
+  // 2dp values can still land a cent off due to float representation, and
+  // this sum is exactly what buybackContractMatch.ts compares against the
+  // contract price a player typed in-game.
+  const totalPrice = round2(
+    pricedItems.reduce((sum, item) => sum + item.totalPrice, 0),
+  );
 
   return { ok: true, location, items: pricedItems, totalPrice };
 }

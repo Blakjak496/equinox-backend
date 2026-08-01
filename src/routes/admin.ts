@@ -17,7 +17,7 @@ import { Station } from "../models/Station";
 import { computeAvailableQuantities } from "../services/buyOrder";
 import { syncCorpAssetStock } from "../services/corpAssetSync";
 import { notifyBuyOrderUpdate } from "../services/discordNotify";
-import { getAccessToken } from "../lib/esiClient";
+import { getAccessToken, resolveCharacterIdForRole } from "../lib/esiClient";
 import { getOrFetchStructure } from "../utils/structure-utils";
 import {
   ensureSystemIsCached,
@@ -32,6 +32,8 @@ import {
 import { discoverJumpBridges } from "../services/jumpBridgeDiscovery";
 import { JumpBridge, IJumpBridge } from "../models/JumpBridge";
 import { computeMapBoundsAndRegions } from "../services/mapView";
+import { EsiAuth } from "../models/EsiAuth";
+import { getOrFetchCorporation } from "../utils/corporation-utils";
 import { ensureRegionIsCached } from "../utils/region-utils";
 import { fetchJson } from "../utils/general-utils";
 
@@ -75,6 +77,70 @@ adminRouter.patch("/config", async (req, res) => {
     res.status(500).json({
       ok: false,
       message: "Something went wrong while updating the config document",
+      error: err,
+    });
+  }
+});
+
+adminRouter.get("/esi-characters", async (_req, res) => {
+  try {
+    const characters = await EsiAuth.find().sort({ connectedAt: 1 });
+    const data = await Promise.all(
+      characters.map(async (character) => {
+        const corporation = await getOrFetchCorporation(
+          Number(character.corporationId),
+        );
+        return {
+          characterId: character.characterId,
+          characterName: character.characterName,
+          corporationId: character.corporationId,
+          corporationName: corporation.name,
+          needsReconnect: character.needsReconnect,
+          connectedAt: character.connectedAt,
+        };
+      }),
+    );
+
+    res.status(200).json({ ok: true, data });
+  } catch (err) {
+    console.error("Failed to list ESI characters:", err);
+    res.status(500).json({
+      ok: false,
+      message: "Failed to list ESI characters",
+      error: err,
+    });
+  }
+});
+
+// Removing a character that's currently assigned to a Settings role falls
+// back to "whichever character is connected" automatically
+// (resolveCharacterIdForRole in lib/esiClient.ts already handles a dangling
+// assignment) - clearing it here too just keeps the Settings dropdowns
+// honest instead of showing a phantom selection.
+adminRouter.delete("/esi-characters/:characterId", async (req, res) => {
+  const characterId = req.params.characterId;
+
+  try {
+    await EsiAuth.deleteOne({ characterId });
+
+    const config = await Config.findOne();
+    const clearedFields: Record<string, null> = {};
+    if (config?.businessCharacterId === characterId) {
+      clearedFields.businessCharacterId = null;
+    }
+    if (config?.structureCharacterId === characterId) {
+      clearedFields.structureCharacterId = null;
+    }
+    if (Object.keys(clearedFields).length > 0) {
+      await Config.updateOne({}, clearedFields);
+    }
+
+    res.status(200).json({ ok: true });
+  } catch (err) {
+    console.error("Failed to remove ESI character:", err);
+    res.status(500).json({
+      ok: false,
+      message: "Failed to remove ESI character",
       error: err,
     });
   }
@@ -1091,7 +1157,8 @@ adminRouter.post("/structures/fetch", async (req, res) => {
   }
 
   try {
-    const token = await getAccessToken();
+    const structureCharacterId = await resolveCharacterIdForRole("structure");
+    const token = await getAccessToken(structureCharacterId);
     // Manual admin action - always ask ESI live rather than trusting the
     // cache. A cached access:"forbidden" doc is otherwise permanent (the
     // early-return cache-hit path never re-checks ESI), which would

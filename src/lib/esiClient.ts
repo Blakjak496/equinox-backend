@@ -1,12 +1,17 @@
 import { EsiAuth } from "../models/EsiAuth";
+import { Config } from "../models/Config";
 import { decrypt } from "./crypto";
 
-let cachedToken: string | null = null;
-let tokenExpiresAt: number = 0;
-let refreshPromise: Promise<string> | null = null;
+type CachedToken = { token: string; expiresAt: number };
 
-function tokenIsValid(): boolean {
-  return cachedToken !== null && Date.now() < tokenExpiresAt - 60000;
+// Keyed by characterId - multiple characters can be connected at once, each
+// with its own independently-cached access token and in-flight refresh.
+const tokenCache = new Map<string, CachedToken>();
+const refreshPromises = new Map<string, Promise<string>>();
+
+function tokenIsValid(characterId: string): boolean {
+  const cached = tokenCache.get(characterId);
+  return cached !== undefined && Date.now() < cached.expiresAt - 60000;
 }
 
 // Call after writing a new refresh token to EsiAuth (a fresh SSO
@@ -14,37 +19,85 @@ function tokenIsValid(): boolean {
 // still-valid cached access token from before the reconnect keeps getting
 // reused - issued under the old scope set - until it naturally expires
 // (up to ~20 min), silently ignoring the new refresh token in the DB.
-export function invalidateAccessTokenCache(): void {
-  cachedToken = null;
-  tokenExpiresAt = 0;
+// Omit characterId to clear every cached character's token.
+export function invalidateAccessTokenCache(characterId?: string): void {
+  if (characterId) {
+    tokenCache.delete(characterId);
+    refreshPromises.delete(characterId);
+  } else {
+    tokenCache.clear();
+    refreshPromises.clear();
+  }
 }
 
-export async function getAccessToken(): Promise<string> {
-  if (tokenIsValid()) {
-    return cachedToken!;
+export async function getAccessToken(characterId: string): Promise<string> {
+  if (tokenIsValid(characterId)) {
+    return tokenCache.get(characterId)!.token;
   }
 
-  if (refreshPromise) {
-    return refreshPromise;
+  const inflight = refreshPromises.get(characterId);
+  if (inflight) {
+    return inflight;
   }
 
-  refreshPromise = (async () => {
-    const auth = await EsiAuth.findOne();
-    if (!auth) throw new Error("No ESI auth found. Eve account not connected.");
+  const promise = (async () => {
+    const auth = await EsiAuth.findOne({ characterId });
+    if (!auth)
+      throw new Error(`No ESI auth found for character ${characterId}.`);
 
     const decryptedRefreshToken = decrypt(auth.refreshToken);
-    const { accessToken, expiresIn } = await refreshAccessToken(
-      decryptedRefreshToken,
-    );
+    let accessToken: string;
+    let expiresIn: number;
+    try {
+      ({ accessToken, expiresIn } = await refreshAccessToken(
+        decryptedRefreshToken,
+      ));
+    } catch (err) {
+      // A revoked/expired refresh token means this character needs to go
+      // through SSO again - surfaced in the admin character list instead of
+      // just failing whichever cron job happened to touch it next.
+      if (err instanceof Error && err.message === "invalid_grant") {
+        await EsiAuth.updateOne({ characterId }, { needsReconnect: true });
+      }
+      throw err;
+    }
 
-    cachedToken = accessToken;
-    tokenExpiresAt = Date.now() + expiresIn * 1000;
-    refreshPromise = null;
+    tokenCache.set(characterId, {
+      token: accessToken,
+      expiresAt: Date.now() + expiresIn * 1000,
+    });
+    refreshPromises.delete(characterId);
 
-    return cachedToken;
+    return accessToken;
   })();
 
-  return refreshPromise;
+  refreshPromises.set(characterId, promise);
+  return promise;
+}
+
+// Which connected character an automated pipeline should act as. "business"
+// covers contract sync, corp asset sync, and buyback/purchase-order
+// matching; "structure" covers Structure Discovery and the Jump Planner's
+// structure lookups - split out because ESI's structure-visibility check is
+// per-character (docking history), so a character that can't see a
+// structure for one pipeline might still be fine for the other, and vice
+// versa. Both fall back to whichever character happens to be connected when
+// unassigned, so this is a no-op change until an admin explicitly picks a
+// character for a role in Settings.
+export async function resolveCharacterIdForRole(
+  role: "business" | "structure",
+): Promise<string> {
+  const config = await Config.findOne();
+  const assignedId =
+    role === "business" ? config?.businessCharacterId : config?.structureCharacterId;
+
+  if (assignedId && (await EsiAuth.exists({ characterId: assignedId }))) {
+    return assignedId;
+  }
+
+  const auth = await EsiAuth.findOne();
+  if (!auth) throw new Error("No ESI auth found. Eve account not connected.");
+  return auth.characterId;
 }
 
 async function refreshAccessToken(

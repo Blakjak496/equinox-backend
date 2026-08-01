@@ -1,5 +1,4 @@
-import { EsiAuth } from "../models/EsiAuth";
-import { getAccessToken } from "../lib/esiClient";
+import { getAccessToken, resolveCharacterIdForRole } from "../lib/esiClient";
 import { getOrFetchStructure } from "../utils/structure-utils";
 import { ensureSystemIsCached, getSystemIdByName } from "../utils/system-utils";
 import { fetchJsonWithBearer } from "../utils/general-utils";
@@ -67,11 +66,8 @@ export async function discoverJumpBridges(
     );
   }
 
-  const accessToken = await getAccessToken();
-  const auth = await EsiAuth.findOne();
-  if (!auth) throw new Error("No ESI auth found. Eve account not connected.");
-
-  const characterId = auth.characterId;
+  const characterId = await resolveCharacterIdForRole("structure");
+  const accessToken = await getAccessToken(characterId);
   const url = `https://esi.evetech.net/latest/characters/${characterId}/search/?categories=structure&search=${encodeURIComponent(searchQuery)}&datasource=tranquility`;
 
   console.log(

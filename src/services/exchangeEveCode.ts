@@ -15,7 +15,12 @@ export async function exchangeEveCode(
   code: string,
   codeVerifier: string,
   redirectUri: string,
-): Promise<{ ok: boolean; characterId: string; corporationId: string }> {
+): Promise<{
+  ok: boolean;
+  characterId: string;
+  characterName: string | null;
+  corporationId: string;
+}> {
   const clientId = process.env.EVE_CLIENT_ID;
   const clientSecret = process.env.EVE_CLIENT_SECRET;
 
@@ -70,16 +75,23 @@ export async function exchangeEveCode(
       `Failed to fetch character info ${charRes.status}: ${charText}`,
     );
 
-  const charJson = JSON.parse(charText) as { corporation_id: number };
+  const charJson = JSON.parse(charText) as {
+    corporation_id: number;
+    name: string;
+  };
   const corporationId = String(charJson.corporation_id);
+  const characterName = charJson.name ?? null;
 
   const encryptedRefreshToken = encrypt(token.refresh_token);
 
+  // Keyed by characterId, not an empty filter - connecting a second (or
+  // third) character now adds a new EsiAuth doc instead of overwriting
+  // whichever one previously existed.
   await EsiAuth.findOneAndUpdate(
-    {},
+    { characterId: String(characterId) },
     {
       refreshToken: encryptedRefreshToken,
-      characterId: String(characterId),
+      characterName,
       corporationId,
       connectedAt: new Date(),
       needsReconnect: false,
@@ -90,8 +102,9 @@ export async function exchangeEveCode(
 
   // The new refresh token is useless to callers still holding a cached
   // access token issued under the old scope set - force the next
-  // getAccessToken() to actually exchange it.
-  invalidateAccessTokenCache();
+  // getAccessToken() to actually exchange it. Scoped to this character only
+  // - other connected characters' cached tokens are unaffected.
+  invalidateAccessTokenCache(String(characterId));
 
-  return { ok: true, characterId: String(characterId), corporationId };
+  return { ok: true, characterId: String(characterId), characterName, corporationId };
 }

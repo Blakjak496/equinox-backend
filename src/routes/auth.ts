@@ -13,7 +13,7 @@ router.post("/eve", adminAuth, async (req, res) => {
 
     const response = await exchangeEveCode(code, codeVerifier, redirectUri);
 
-    res.json({ ok: response.ok });
+    res.json({ ok: response.ok, characterName: response.characterName });
   } catch (err) {
     console.error("Eve SSO exchange failed:", err);
     res.status(500).json({ ok: false, error: "SSO exchange failed" });

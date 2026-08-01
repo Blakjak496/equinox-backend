@@ -1,4 +1,4 @@
-import { getAccessToken } from "../lib/esiClient";
+import { getAccessToken, resolveCharacterIdForRole } from "../lib/esiClient";
 import { BuybackItem, IBuybackItemLocationStock } from "../models/BuybackItem";
 import { BuybackLocation } from "../models/BuybackLocation";
 import { EsiAuth } from "../models/EsiAuth";
@@ -162,8 +162,9 @@ export async function syncCorpAssetStock(): Promise<CorpAssetSyncResult> {
     // clean result back instead of an unhandled rejection.
     let assets;
     try {
-      const token = await getAccessToken();
-      const auth = await EsiAuth.findOne();
+      const characterId = await resolveCharacterIdForRole("business");
+      const token = await getAccessToken(characterId);
+      const auth = await EsiAuth.findOne({ characterId });
       const corporationId = Number(auth!.corporationId);
       assets = await fetchAllCorpAssets(corporationId, token);
     } catch (err) {

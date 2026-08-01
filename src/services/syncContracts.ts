@@ -1,4 +1,4 @@
-import { getAccessToken } from "../lib/esiClient";
+import { getAccessToken, resolveCharacterIdForRole } from "../lib/esiClient";
 import { ICharacter } from "../models/Character";
 import { Contract, IContractValidation } from "../models/Contract";
 import { ICorporation } from "../models/Corporation";
@@ -52,8 +52,9 @@ export async function syncContracts(): Promise<void> {
   syncRunning = true;
 
   try {
-    const token = await getAccessToken();
-    const auth = await EsiAuth.findOne();
+    const characterId = await resolveCharacterIdForRole("business");
+    const token = await getAccessToken(characterId);
+    const auth = await EsiAuth.findOne({ characterId });
     const corporationId = Number(auth!.corporationId);
 
     const contractsUrl = `https://esi.evetech.net/latest/corporations/${corporationId}/contracts/?datasource=tranquility`;

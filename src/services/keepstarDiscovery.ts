@@ -1,6 +1,7 @@
 import { getAccessToken, resolveCharacterIdForRole } from "../lib/esiClient";
 import { getOrFetchStructure } from "../utils/structure-utils";
 import { fetchJsonWithBearer } from "../utils/general-utils";
+import { EsiAuth } from "../models/EsiAuth";
 
 // Keepstar's inventory type ID - confirmed live against ESI
 // (POST /universe/ids/ with name "Keepstar"), not assumed. 35832 is the
@@ -26,6 +27,12 @@ export type KeepstarDiscoveryResponse = {
   searchQuery: string;
   totalFound: number;
   results: KeepstarDiscoveryResult[];
+  // Which character actually ran this search - resolveCharacterIdForRole's
+  // fallback to "whichever character is connected" is otherwise silent, so
+  // this is the only way to confirm the Settings-page role assignment
+  // actually took effect without digging through server logs.
+  characterId: string;
+  characterName: string | null;
 };
 
 // Baseline pacing between resolve calls - keeps a large, mostly-uncached
@@ -188,5 +195,13 @@ export async function discoverKeepstars(
     `[keepstarDiscovery] resolved ${results.length}/${structureIds.length} candidates - ${keepstarCount} keepstar(s) found`,
   );
 
-  return { searchQuery, totalFound: structureIds.length, results };
+  const searchingCharacter = await EsiAuth.findOne({ characterId });
+
+  return {
+    searchQuery,
+    totalFound: structureIds.length,
+    results,
+    characterId,
+    characterName: searchingCharacter?.characterName ?? null,
+  };
 }

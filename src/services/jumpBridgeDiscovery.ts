@@ -3,6 +3,7 @@ import { getOrFetchStructure } from "../utils/structure-utils";
 import { ensureSystemIsCached, getSystemIdByName } from "../utils/system-utils";
 import { fetchJsonWithBearer } from "../utils/general-utils";
 import { JumpBridge } from "../models/JumpBridge";
+import { EsiAuth } from "../models/EsiAuth";
 
 // Ansiblex jump bridges have no confirmed-live type ID in this codebase
 // (unlike KEEPSTAR_TYPE_ID in keepstarDiscovery.ts) - classification here is
@@ -34,6 +35,12 @@ export type JumpBridgeDiscoveryResponse = {
   searchQuery: string;
   totalFound: number;
   results: JumpBridgeDiscoveryResult[];
+  // Which character actually ran this search - resolveCharacterIdForRole's
+  // fallback to "whichever character is connected" is otherwise silent, so
+  // this is the only way to confirm the Settings-page role assignment
+  // actually took effect without digging through server logs.
+  characterId: string;
+  characterName: string | null;
 };
 
 // Same pacing as keepstarDiscovery.ts's RESOLVE_DELAY_MS - kept as a
@@ -228,5 +235,13 @@ export async function discoverJumpBridges(
     `[jumpBridgeDiscovery] resolved ${results.length}/${structureIds.length} candidates - ${jumpBridgeCount} jump bridge(s) found`,
   );
 
-  return { searchQuery, totalFound: structureIds.length, results };
+  const searchingCharacter = await EsiAuth.findOne({ characterId });
+
+  return {
+    searchQuery,
+    totalFound: structureIds.length,
+    results,
+    characterId,
+    characterName: searchingCharacter?.characterName ?? null,
+  };
 }

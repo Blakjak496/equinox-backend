@@ -91,8 +91,17 @@ export async function resolveCharacterIdForRole(
   const assignedId =
     role === "business" ? config?.businessCharacterId : config?.structureCharacterId;
 
-  if (assignedId && (await EsiAuth.exists({ characterId: assignedId }))) {
-    return assignedId;
+  if (assignedId) {
+    if (await EsiAuth.exists({ characterId: assignedId })) {
+      return assignedId;
+    }
+    // The Settings-page assignment points at a character that no longer has
+    // an EsiAuth doc (removed, or the value is stale/mistyped) - falling
+    // through to "whichever character is connected" is otherwise silent,
+    // which is exactly what makes a wrong assignment hard to diagnose.
+    console.warn(
+      `[esiClient] Config.${role}CharacterId is set to "${assignedId}" but no connected character matches it - falling back to any connected character.`,
+    );
   }
 
   const auth = await EsiAuth.findOne();

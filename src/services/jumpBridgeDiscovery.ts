@@ -98,7 +98,19 @@ export async function discoverJumpBridges(
   for (let i = 0; i < structureIds.length; i++) {
     const structureId = structureIds[i];
     try {
-      const structure = await getOrFetchStructure(structureId, accessToken);
+      let structure = await getOrFetchStructure(structureId, accessToken);
+
+      // A cached "forbidden" verdict is permanent otherwise (getOrFetchStructure
+      // only ever hits ESI again if the cache is empty or forceRefresh is
+      // passed) - it may just be stale from an earlier, less-privileged
+      // character's attempt, which is exactly the scenario multi-character
+      // support exists for. Re-check live with the character actually being
+      // used for this search before accepting the denial.
+      if (structure && "access" in structure && structure.access === "forbidden") {
+        structure = await getOrFetchStructure(structureId, accessToken, {
+          forceRefresh: true,
+        });
+      }
 
       if (!structure || !("access" in structure)) {
         results.push({

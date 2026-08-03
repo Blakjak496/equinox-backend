@@ -15,6 +15,10 @@ export interface IConfig extends Document {
   // leave unset until an admin actually needs to split them apart.
   businessCharacterId: string | null;
   structureCharacterId: string | null;
+  // Corporations whose members are allowed to log into the read-only Tools
+  // app via EVE SSO - checked at login and re-checked on every session
+  // refresh (see toolsAuth.ts). Empty means nobody can log in yet.
+  allowedCorpIds: string[];
 }
 
 const ConfigSchema = new Schema<IConfig>(
@@ -27,6 +31,7 @@ const ConfigSchema = new Schema<IConfig>(
     cartelEnabled: { type: Boolean, required: true, default: true },
     businessCharacterId: { type: String, default: null },
     structureCharacterId: { type: String, default: null },
+    allowedCorpIds: { type: [String], default: [] },
   },
   { timestamps: true },
 );

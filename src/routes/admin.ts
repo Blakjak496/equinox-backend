@@ -24,18 +24,21 @@ import {
   getSystemIdByName,
 } from "../utils/system-utils";
 import { calculateOptimalRoute } from "../services/routeCalculator";
-import { findJumpPath } from "../services/jumpPathfinder";
 import {
   discoverKeepstars,
   KEEPSTAR_TYPE_ID,
 } from "../services/keepstarDiscovery";
 import { discoverJumpBridges } from "../services/jumpBridgeDiscovery";
-import { JumpBridge, IJumpBridge } from "../models/JumpBridge";
+import { JumpBridge } from "../models/JumpBridge";
 import { computeMapBoundsAndRegions } from "../services/mapView";
 import { EsiAuth } from "../models/EsiAuth";
 import { getOrFetchCorporation } from "../utils/corporation-utils";
-import { ensureRegionIsCached } from "../utils/region-utils";
-import { fetchJson } from "../utils/general-utils";
+import {
+  dedupeJumpBridgePairs,
+  getKnownJumpBridgePairs,
+  buildJumpBridgeExportText,
+} from "../services/jumpBridgeExport";
+import { planJumpRoute } from "../services/jumpRoutePlanner";
 
 const adminRouter = Router();
 
@@ -677,107 +680,13 @@ adminRouter.delete("/ship-categories/:id", async (req, res) => {
 adminRouter.post("/jump-routes/plan", async (req, res) => {
   const { waypointNames, shipCategoryId, restrictToKeepstars } = req.body;
 
-  if (!Array.isArray(waypointNames) || waypointNames.length < 2 || !shipCategoryId) {
-    res.status(400).json({
-      ok: false,
-      message: "waypointNames (at least 2) and shipCategoryId are required",
-    });
-    return;
-  }
-
   try {
-    const shipCategory = await ShipCategory.findById(shipCategoryId);
-    if (!shipCategory) {
-      res.status(404).json({ ok: false, message: "Ship category not found" });
+    const result = await planJumpRoute(waypointNames, shipCategoryId, Boolean(restrictToKeepstars));
+    if (!result.ok) {
+      res.status(result.status).json({ ok: false, message: result.message });
       return;
     }
-
-    const systemIds = await Promise.all(
-      waypointNames.map((name: string) => getSystemIdByName(name)),
-    );
-
-    const missingIndex = systemIds.findIndex((id) => !id);
-    if (missingIndex !== -1) {
-      res.status(404).json({
-        ok: false,
-        message: `Could not resolve "${waypointNames[missingIndex]}"`,
-      });
-      return;
-    }
-
-    const systems = await Promise.all(
-      systemIds.map((id) => ensureSystemIsCached(id!)),
-    );
-
-    // Computed unconditionally, not just when restricted, so a system that
-    // happens to host a known Keepstar still gets its label/stop annotation
-    // even on an unrestricted route.
-    const knownKeepstars = await Structure.find({
-      typeId: KEEPSTAR_TYPE_ID,
-      access: "ok",
-    });
-    const keepstarSystemIds = new Set<number>();
-    const keepstarNameBySystemId = new Map<number, string>();
-    for (const keepstar of knownKeepstars) {
-      if (keepstar.systemId === null) continue;
-      keepstarSystemIds.add(keepstar.systemId);
-      if (!keepstarNameBySystemId.has(keepstar.systemId)) {
-        keepstarNameBySystemId.set(keepstar.systemId, keepstar.name ?? "Unknown");
-      }
-    }
-
-    if (restrictToKeepstars) {
-      const badIndex = systems.findIndex(
-        (s) => !s || !keepstarSystemIds.has(s.systemId),
-      );
-      if (badIndex !== -1) {
-        res.status(400).json({
-          ok: false,
-          message: `"${waypointNames[badIndex]}" is not a known Keepstar system`,
-        });
-        return;
-      }
-    }
-
-    const fullPath: { systemId: number; name: string }[] = [
-      { systemId: systems[0]!.systemId, name: systems[0]!.name },
-    ];
-    let totalDistanceLY = 0;
-
-    for (let i = 0; i < systems.length - 1; i++) {
-      const leg = findJumpPath(
-        systems[i]!.systemId,
-        systems[i + 1]!.systemId,
-        shipCategory.jumpRangeLY,
-        restrictToKeepstars ? keepstarSystemIds : undefined,
-      );
-
-      if ("error" in leg) {
-        res.status(400).json({ ok: false, message: leg.error });
-        return;
-      }
-
-      totalDistanceLY += leg.totalDistanceLY;
-      for (const system of leg.path.slice(1)) {
-        fullPath.push({ systemId: system.systemId, name: system.name });
-      }
-    }
-
-    const stops = fullPath.map((entry) => ({
-      systemName: entry.name,
-      keepstarName: keepstarNameBySystemId.get(entry.systemId) ?? null,
-    }));
-
-    const mapView = await computeMapBoundsAndRegions(fullPath, keepstarNameBySystemId);
-
-    res.status(200).json({
-      ok: true,
-      data: {
-        stops,
-        totalDistanceLY,
-        ...mapView,
-      },
-    });
+    res.status(200).json({ ok: true, data: result.data });
   } catch (err) {
     console.error("Failed to plan jump route:", err);
     res
@@ -928,52 +837,10 @@ adminRouter.post("/jump-bridges/manual", async (req, res) => {
 });
 
 // A jump bridge pair may be backed by 1 or 2 persisted JumpBridge docs (one
-// per direction, if both sides were separately discovered) - this collapses
-// each unordered {home, remote} pair down to one entry, regardless of how
-// many directions are actually known, so /known and /map never show the
-// same physical bridge twice. systemAId/systemBId may be null if that side
-// was never resolved to a system.
-function dedupeJumpBridgePairs(bridges: IJumpBridge[]): {
-  systemAName: string;
-  systemBName: string;
-  systemAId: number | null;
-  systemBId: number | null;
-}[] {
-  const byKey = new Map<string, IJumpBridge[]>();
-  for (const bridge of bridges) {
-    const key = [bridge.homeSystemName, bridge.remoteSystemName].sort().join("|");
-    const bucket = byKey.get(key);
-    if (bucket) bucket.push(bridge);
-    else byKey.set(key, [bridge]);
-  }
-
-  return Array.from(byKey.entries()).map(([key, docs]) => {
-    const [systemAName, systemBName] = key.split("|");
-    const forward = docs.find((d) => d.homeSystemName === systemAName);
-    const backward = docs.find((d) => d.homeSystemName === systemBName);
-    return {
-      systemAName,
-      systemBName,
-      systemAId: forward?.homeSystemId ?? backward?.remoteSystemId ?? null,
-      systemBId: backward?.homeSystemId ?? forward?.remoteSystemId ?? null,
-    };
-  });
-}
-
 adminRouter.get("/jump-bridges/known", async (_req, res) => {
   try {
-    const bridges = await JumpBridge.find();
-    const pairs = dedupeJumpBridgePairs(bridges).sort((a, b) =>
-      a.systemAName.localeCompare(b.systemAName),
-    );
-
-    res.status(200).json({
-      ok: true,
-      data: pairs.map((p) => ({
-        systemAName: p.systemAName,
-        systemBName: p.systemBName,
-      })),
-    });
+    const data = await getKnownJumpBridgePairs();
+    res.status(200).json({ ok: true, data });
   } catch (err) {
     console.error("Failed to load known jump bridges:", err);
     res.status(500).json({
@@ -1039,59 +906,6 @@ adminRouter.get("/jump-bridges/map", async (_req, res) => {
   }
 });
 
-// Two directions per unique pair, always - one backed by a real structureId
-// (whichever direction actually has a discovered structure with that
-// homeSystemName), the other by null if the reverse structure was never
-// discovered. Both Rift and SMT exports below want every pair represented
-// bidirectionally regardless of how much of it was actually found.
-function buildJumpBridgeDirections(bridges: IJumpBridge[]): {
-  fromName: string;
-  toName: string;
-  fromSystemId: number | null;
-  structureId: number | null;
-}[] {
-  const byKey = new Map<string, IJumpBridge[]>();
-  for (const bridge of bridges) {
-    const key = [bridge.homeSystemName, bridge.remoteSystemName].sort().join("|");
-    const bucket = byKey.get(key);
-    if (bucket) bucket.push(bridge);
-    else byKey.set(key, [bridge]);
-  }
-
-  const directions: {
-    fromName: string;
-    toName: string;
-    fromSystemId: number | null;
-    structureId: number | null;
-  }[] = [];
-
-  for (const [key, docs] of byKey) {
-    const [nameA, nameB] = key.split("|");
-    const forward = docs.find((d) => d.homeSystemName === nameA);
-    const backward = docs.find((d) => d.homeSystemName === nameB);
-    directions.push({
-      fromName: nameA,
-      toName: nameB,
-      fromSystemId: forward?.homeSystemId ?? backward?.remoteSystemId ?? null,
-      structureId: forward?.structureId ?? null,
-    });
-    directions.push({
-      fromName: nameB,
-      toName: nameA,
-      fromSystemId: backward?.homeSystemId ?? forward?.remoteSystemId ?? null,
-      structureId: backward?.structureId ?? null,
-    });
-  }
-
-  return directions;
-}
-
-// Exports the known jump bridge list as plain text for two third-party
-// route-planning tools. Both formats emit every pair bidirectionally (see
-// buildJumpBridgeDirections above); SMT additionally needs each direction's
-// home region, which isn't something this codebase caches wholesale today
-// (Region.ts/ensureRegionIsCached only caches regions actually encountered
-// on demand) - so the full region list is fetched live from ESI here.
 adminRouter.get("/jump-bridges/export", async (req, res) => {
   const format = req.query.format;
   if (format !== "rift" && format !== "smt") {
@@ -1100,69 +914,9 @@ adminRouter.get("/jump-bridges/export", async (req, res) => {
   }
 
   try {
-    const bridges = await JumpBridge.find();
-    const directions = buildJumpBridgeDirections(bridges);
-
-    if (format === "rift") {
-      const text = directions.map((d) => `${d.fromName} -> ${d.toName}`).join("\n") + "\n";
-      res.set("Content-Type", "text/plain; charset=utf-8");
-      res.set("Content-Disposition", 'attachment; filename="jump-bridges-rift.txt"');
-      res.status(200).send(text);
-      return;
-    }
-
-    // SMT format only - fetch every region ESI knows about, restricted to
-    // the ordinary k-space ID range (10000001-10000070). This is
-    // long-documented EVE static data, not a guess made this session, but
-    // it's worth reconfirming against a live response if the exported file
-    // ever looks like it's missing or including regions unexpectedly -
-    // Ansiblex jump bridges only exist in normal space, so wormhole
-    // (11000000+) and other non-standard region IDs are excluded.
-    const regionsResponse = await fetchJson<number[]>(
-      "https://esi.evetech.net/latest/universe/regions/?datasource=tranquility",
-      "EquinoxGalactic Admin (jump bridge export)",
-    );
-    if (!regionsResponse.ok || !regionsResponse.json) {
-      throw new Error(
-        `ESI region list failed ${regionsResponse.status}: ${regionsResponse.text}`,
-      );
-    }
-    const kSpaceRegionIds = regionsResponse.json.filter(
-      (id) => id >= 10000001 && id <= 10000070,
-    );
-    const allRegions = (
-      await Promise.all(kSpaceRegionIds.map((id) => ensureRegionIsCached(id)))
-    ).filter((r): r is NonNullable<typeof r> => r !== null);
-    allRegions.sort((a, b) => a.name.localeCompare(b.name));
-
-    const fromSystemIds = [
-      ...new Set(
-        directions
-          .map((d) => d.fromSystemId)
-          .filter((id): id is number => id !== null),
-      ),
-    ];
-    const fromSystems = await System.find({ systemId: { $in: fromSystemIds } });
-    const regionIdBySystemId = new Map(
-      fromSystems.map((s) => [s.systemId, s.regionId]),
-    );
-
-    let text = "";
-    for (const region of allRegions) {
-      text += `# ${region.name}\n`;
-      const regionDirections = directions.filter(
-        (d) =>
-          d.fromSystemId !== null &&
-          regionIdBySystemId.get(d.fromSystemId) === region.regionId,
-      );
-      for (const d of regionDirections) {
-        text += `${d.structureId ?? 0} ${d.fromName} --> ${d.toName}\n`;
-      }
-      text += "\n";
-    }
-
+    const { text, filename } = await buildJumpBridgeExportText(format);
     res.set("Content-Type", "text/plain; charset=utf-8");
-    res.set("Content-Disposition", 'attachment; filename="jump-bridges-smt.txt"');
+    res.set("Content-Disposition", `attachment; filename="${filename}"`);
     res.status(200).send(text);
   } catch (err) {
     console.error("Failed to export jump bridges:", err);

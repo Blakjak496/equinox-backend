@@ -84,10 +84,15 @@ toolsRouter.get("/jump-bridges/export", async (req, res) => {
 });
 
 toolsRouter.post("/jump-routes/plan", async (req, res) => {
-  const { waypointNames, shipCategoryId, restrictToKeepstars } = req.body ?? {};
+  const { waypointNames, shipCategoryId, restrictToKeepstars, skillLevel } = req.body ?? {};
 
   try {
-    const result = await planJumpRoute(waypointNames, shipCategoryId, Boolean(restrictToKeepstars));
+    const result = await planJumpRoute(
+      waypointNames,
+      shipCategoryId,
+      Boolean(restrictToKeepstars),
+      Number(skillLevel),
+    );
     if (!result.ok) {
       res.status(result.status).json({ ok: false, message: result.message });
       return;

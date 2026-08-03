@@ -31,6 +31,7 @@ import {
 import { discoverJumpBridges } from "../services/jumpBridgeDiscovery";
 import { JumpBridge } from "../models/JumpBridge";
 import { computeMapBoundsAndRegions } from "../services/mapView";
+import { effectiveJumpRangeLY } from "../utils/jumpRange";
 import { EsiAuth } from "../models/EsiAuth";
 import { getOrFetchCorporation } from "../utils/corporation-utils";
 import {
@@ -498,11 +499,16 @@ adminRouter.post("/routes/calculate", async (req, res) => {
     }
 
     const mainRoutes = await MainRoute.find({ active: true });
+    // Freight costing has no per-user skill selector (it's an internal
+    // admin calculation, not customer-facing like the Jump Planner) - fixed
+    // at level 5 to match exactly what this number always represented
+    // before baseRangeLY existed (confirmed with the user: every existing
+    // category's range was entered at their own level-5-trained range).
     const result = await calculateOptimalRoute(
       pickup,
       dropoff,
       mainRoutes,
-      shipCategory.jumpRangeLY,
+      effectiveJumpRangeLY(shipCategory.baseRangeLY, 5),
     );
 
     if ("error" in result) {
@@ -608,18 +614,18 @@ adminRouter.get("/ship-categories", async (_req, res) => {
 });
 
 adminRouter.post("/ship-categories", async (req, res) => {
-  const { name, jumpRangeLY } = req.body;
+  const { name, baseRangeLY } = req.body;
 
-  if (!name || typeof jumpRangeLY !== "number") {
+  if (!name || typeof baseRangeLY !== "number") {
     res.status(400).json({
       ok: false,
-      message: "name and jumpRangeLY are required",
+      message: "name and baseRangeLY are required",
     });
     return;
   }
 
   try {
-    const shipCategory = await ShipCategory.create({ name, jumpRangeLY });
+    const shipCategory = await ShipCategory.create({ name, baseRangeLY });
     res.status(200).json({ ok: true, data: shipCategory });
   } catch (err) {
     console.error("Failed to create ship category:", err);
@@ -632,12 +638,12 @@ adminRouter.post("/ship-categories", async (req, res) => {
 });
 
 adminRouter.put("/ship-categories/:id", async (req, res) => {
-  const { name, jumpRangeLY } = req.body;
+  const { name, baseRangeLY } = req.body;
 
   try {
     const shipCategory = await ShipCategory.findByIdAndUpdate(
       req.params.id,
-      { name, jumpRangeLY },
+      { name, baseRangeLY },
       { new: true },
     );
 
@@ -678,10 +684,15 @@ adminRouter.delete("/ship-categories/:id", async (req, res) => {
 // restriction flag, since the map is useful for any route, not just a
 // Keepstar-restricted one.
 adminRouter.post("/jump-routes/plan", async (req, res) => {
-  const { waypointNames, shipCategoryId, restrictToKeepstars } = req.body;
+  const { waypointNames, shipCategoryId, restrictToKeepstars, skillLevel } = req.body;
 
   try {
-    const result = await planJumpRoute(waypointNames, shipCategoryId, Boolean(restrictToKeepstars));
+    const result = await planJumpRoute(
+      waypointNames,
+      shipCategoryId,
+      Boolean(restrictToKeepstars),
+      Number(skillLevel),
+    );
     if (!result.ok) {
       res.status(result.status).json({ ok: false, message: result.message });
       return;

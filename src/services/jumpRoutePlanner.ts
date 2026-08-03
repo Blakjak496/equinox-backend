@@ -4,6 +4,7 @@ import { getSystemIdByName, ensureSystemIsCached } from "../utils/system-utils";
 import { findJumpPath } from "./jumpPathfinder";
 import { KEEPSTAR_TYPE_ID } from "./keepstarDiscovery";
 import { computeMapBoundsAndRegions, MapView } from "./mapView";
+import { effectiveJumpRangeLY, isValidSkillLevel } from "../utils/jumpRange";
 
 // Extracted from routes/admin.ts's POST /jump-routes/plan handler so the
 // read-only Tools app can reuse the exact same routing logic (including the
@@ -23,6 +24,7 @@ export async function planJumpRoute(
   waypointNames: string[],
   shipCategoryId: string,
   restrictToKeepstars: boolean,
+  skillLevel: number,
 ): Promise<PlanJumpRouteResult> {
   if (!Array.isArray(waypointNames) || waypointNames.length < 2 || !shipCategoryId) {
     return {
@@ -32,10 +34,20 @@ export async function planJumpRoute(
     };
   }
 
+  if (!isValidSkillLevel(skillLevel)) {
+    return {
+      ok: false,
+      status: 400,
+      message: "skillLevel must be an integer from 1 to 5 (your trained Jump Drive Calibration level)",
+    };
+  }
+
   const shipCategory = await ShipCategory.findById(shipCategoryId);
   if (!shipCategory) {
     return { ok: false, status: 404, message: "Ship category not found" };
   }
+
+  const jumpRangeLY = effectiveJumpRangeLY(shipCategory.baseRangeLY, skillLevel);
 
   const systemIds = await Promise.all(
     waypointNames.map((name) => getSystemIdByName(name)),
@@ -86,7 +98,7 @@ export async function planJumpRoute(
     const leg = findJumpPath(
       systems[i]!.systemId,
       systems[i + 1]!.systemId,
-      shipCategory.jumpRangeLY,
+      jumpRangeLY,
       restrictToKeepstars ? keepstarSystemIds : undefined,
     );
 

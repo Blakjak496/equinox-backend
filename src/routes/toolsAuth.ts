@@ -29,6 +29,7 @@ toolsAuthRouter.post("/login", async (req, res) => {
     if (!(await isCorpAllowed(sso.corporationId))) {
       res.status(403).json({
         ok: false,
+        reason: "corp_not_allowed",
         message: "Your corporation is not authorized to use this tool.",
       });
       return;

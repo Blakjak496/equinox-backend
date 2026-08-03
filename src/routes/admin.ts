@@ -849,6 +849,84 @@ adminRouter.post("/jump-bridges/discover", async (req, res) => {
   }
 });
 
+// Some alliances configure their Ansiblexes such that ESI can never resolve
+// them for a character that hasn't docked there - not a search-visibility
+// gap, an outright resolution failure, confirmed against this exact
+// scenario (coalition-mate-owned structure, real docking access, still
+// unresolvable). There's no ESI fallback for this - the structure ID (from
+// copying the in-game structure link) is the only thing ESI can never
+// substitute for, so everything else has to be supplied by hand too, same
+// as SMT's own manual-entry workaround for the identical limitation.
+adminRouter.post("/jump-bridges/manual", async (req, res) => {
+  const structureId = Number(req.body?.structureId);
+  const name = typeof req.body?.name === "string" ? req.body.name.trim() : "";
+  const homeSystemNameInput =
+    typeof req.body?.homeSystemName === "string" ? req.body.homeSystemName.trim() : "";
+  const remoteSystemNameInput =
+    typeof req.body?.remoteSystemName === "string" ? req.body.remoteSystemName.trim() : "";
+
+  if (!Number.isFinite(structureId) || structureId <= 0) {
+    res.status(400).json({ ok: false, message: "A valid structureId is required" });
+    return;
+  }
+  if (!name || !homeSystemNameInput || !remoteSystemNameInput) {
+    res.status(400).json({
+      ok: false,
+      message: "name, homeSystemName, and remoteSystemName are all required",
+    });
+    return;
+  }
+
+  try {
+    const homeSystemId = await getSystemIdByName(homeSystemNameInput);
+    if (!homeSystemId) {
+      res.status(400).json({
+        ok: false,
+        message: `Could not resolve system "${homeSystemNameInput}"`,
+      });
+      return;
+    }
+    const remoteSystemId = await getSystemIdByName(remoteSystemNameInput);
+    if (!remoteSystemId) {
+      res.status(400).json({
+        ok: false,
+        message: `Could not resolve system "${remoteSystemNameInput}"`,
+      });
+      return;
+    }
+
+    // Same reasoning as jumpBridgeDiscovery.ts - both ends need to be
+    // cached (position/regionId) for map rendering and the region-grouped
+    // export, not just resolvable to an ID.
+    const [homeSystem, remoteSystem] = await Promise.all([
+      ensureSystemIsCached(homeSystemId),
+      ensureSystemIsCached(remoteSystemId),
+    ]);
+
+    const saved = await JumpBridge.findOneAndUpdate(
+      { structureId },
+      {
+        structureId,
+        name,
+        homeSystemName: homeSystem?.name ?? homeSystemNameInput,
+        homeSystemId,
+        remoteSystemName: remoteSystem?.name ?? remoteSystemNameInput,
+        remoteSystemId,
+      },
+      { upsert: true, new: true, setDefaultsOnInsert: true },
+    );
+
+    res.status(200).json({ ok: true, data: saved });
+  } catch (err) {
+    console.error("Failed to save manual jump bridge:", err);
+    res.status(500).json({
+      ok: false,
+      message: "Failed to save manual jump bridge",
+      error: err,
+    });
+  }
+});
+
 // A jump bridge pair may be backed by 1 or 2 persisted JumpBridge docs (one
 // per direction, if both sides were separately discovered) - this collapses
 // each unordered {home, remote} pair down to one entry, regardless of how

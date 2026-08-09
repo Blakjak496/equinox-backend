@@ -24,12 +24,18 @@ const RIG_ATTRS = {
   reaction: { material: 2714, cost: null, time: 2713 }, // confirmed: no cost rig for reactions
 } as const;
 
-const STRUCTURE_TYPE_NAMES: { name: string; activity: "manufacturing" | "reaction" }[] = [
-  { name: "Raitaru", activity: "manufacturing" },
-  { name: "Azbel", activity: "manufacturing" },
-  { name: "Sotiyo", activity: "manufacturing" },
-  { name: "Athanor", activity: "reaction" },
-  { name: "Tatara", activity: "reaction" },
+// groupID, not just name, is required to identify these reliably - the
+// SDE has an unrelated item (a "Large Collidable Object", typeId 58735,
+// groupID 226) that also happens to be named "Azbel", confirmed live. Real
+// Engineering Complexes share groupID 1404, real Refineries share 1406.
+const ENGINEERING_COMPLEX_GROUP_ID = 1404;
+const REFINERY_GROUP_ID = 1406;
+const STRUCTURE_TYPE_NAMES: { name: string; groupId: number; activity: "manufacturing" | "reaction" }[] = [
+  { name: "Raitaru", groupId: ENGINEERING_COMPLEX_GROUP_ID, activity: "manufacturing" },
+  { name: "Azbel", groupId: ENGINEERING_COMPLEX_GROUP_ID, activity: "manufacturing" },
+  { name: "Sotiyo", groupId: ENGINEERING_COMPLEX_GROUP_ID, activity: "manufacturing" },
+  { name: "Athanor", groupId: REFINERY_GROUP_ID, activity: "reaction" },
+  { name: "Tatara", groupId: REFINERY_GROUP_ID, activity: "reaction" },
 ];
 
 // Ordered, most-specific-first - matched against a real rig's own type
@@ -150,9 +156,9 @@ async function run() {
     invGroups.map((row) => [Number(row.groupID), Number(row.categoryID)]),
   );
 
-  // -- find every real structure type + rig type by name --
+  // -- find every real structure type + rig type --
   const structureCandidates = invTypes.filter((row) =>
-    STRUCTURE_TYPE_NAMES.some((s) => s.name === row.typeName),
+    STRUCTURE_TYPE_NAMES.some((s) => s.name === row.typeName && s.groupId === Number(row.groupID)),
   );
   const rigCandidates = invTypes.filter(
     (row) => RIG_NAME_PATTERN.test(row.typeName) && !row.typeName.includes("Blueprint"),
@@ -189,7 +195,9 @@ async function run() {
 
   for (const row of structureCandidates) {
     const typeId = Number(row.typeID);
-    const activity = STRUCTURE_TYPE_NAMES.find((s) => s.name === row.typeName)!.activity;
+    const activity = STRUCTURE_TYPE_NAMES.find(
+      (s) => s.name === row.typeName && s.groupId === Number(row.groupID),
+    )!.activity;
     const attrs = STRUCTURE_ATTRS[activity];
 
     // Rounded to 4dp - (multiplier - 1) * 100 on a binary float (e.g. 0.99)

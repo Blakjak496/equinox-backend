@@ -22,7 +22,6 @@ async function describeProfile(profile: IIndustryProfile) {
 
   return {
     activity: profile.activity,
-    securityClass: profile.securityClass,
     facilityTaxPercent: profile.facilityTaxPercent,
     structureTypeId: profile.structureTypeId,
     structureTypeName: byId.get(profile.structureTypeId)?.name ?? null,

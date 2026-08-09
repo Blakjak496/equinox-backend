@@ -27,7 +27,6 @@ export interface IIndustryProfile {
   activity: "manufacturing" | "reaction" | "research" | "copying" | "invention";
   structureTypeId: number; // -> IndustryBonusType (kind: "structure")
   rigTypeIds: number[]; // -> IndustryBonusType (kind: "rig"), each a real fitted rig
-  securityClass: "highsec" | "lowsec" | "nullsec" | "wormhole";
   // Facility tax rate (%) the structure owner has set in-game - not
   // derivable from SDE/ESI, feeds into the EIV-based job cost formula
   // alongside the fixed SCC surcharge (see buildResolver.ts).
@@ -57,11 +56,6 @@ const IndustryProfileSchema = new Schema<IIndustryProfile>(
     },
     structureTypeId: { type: Number, required: true },
     rigTypeIds: { type: [Number], default: [] },
-    securityClass: {
-      type: String,
-      enum: ["highsec", "lowsec", "nullsec", "wormhole"],
-      required: true,
-    },
     facilityTaxPercent: { type: Number, required: true, default: 0 },
   },
   { _id: false },

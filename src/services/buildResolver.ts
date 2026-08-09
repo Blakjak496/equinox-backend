@@ -72,9 +72,16 @@ type ActivityStructure = {
 
 type StructuresByActivity = Partial<Record<"manufacturing" | "reaction", ActivityStructure>>;
 
-// Fixed, universal, not configurable - confirmed against EVE University's
-// job-cost formula.
-const SCC_SURCHARGE = 0.04;
+// Fixed rate per activity, not configurable - confirmed real rates:
+// manufacturing, reactions, and blueprint copying are all 4%; blueprint
+// ME/TE research is 2%. Only manufacturing/reaction are ever looked up
+// here (Blueprint.activity is never anything else), but keyed by activity
+// rather than a bare constant so the rate applied is the real per-activity
+// rule, not a coincidence of the two supported activities sharing a value.
+const SCC_SURCHARGE_BY_ACTIVITY: Record<"manufacturing" | "reaction", number> = {
+  manufacturing: 0.04,
+  reaction: 0.04,
+};
 
 // Per-unit result of the memoized bottom-up resolve - unitCost/decision are
 // made once per typeId based purely on that item's own unit economics, per
@@ -327,7 +334,8 @@ async function resolve(
   const costIndex = await getSystemCostIndex(structureEntry.systemId, blueprint.activity);
   const facilityTaxRate = structureEntry.facilityTaxPercent / 100;
 
-  const jobUnitCost = eivPerUnit * (costIndex * costMultiplier + facilityTaxRate + SCC_SURCHARGE);
+  const sccSurcharge = SCC_SURCHARGE_BY_ACTIVITY[blueprint.activity];
+  const jobUnitCost = eivPerUnit * (costIndex * costMultiplier + facilityTaxRate + sccSurcharge);
   const buildUnitCost = materialUnitCost + jobUnitCost;
   const decision: "build" | "buy" = buildUnitCost < buyPrice ? "build" : "buy";
 

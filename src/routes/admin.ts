@@ -705,30 +705,18 @@ adminRouter.get("/structures/industry", async (_req, res) => {
 // on the profile itself.
 adminRouter.get("/industry-bonus-types", async (req, res) => {
   const kind = req.query.kind as string | undefined;
-  const activity = req.query.activity as string | undefined;
 
   if (kind !== "structure" && kind !== "rig") {
     res.status(400).json({ ok: false, message: "kind must be 'structure' or 'rig'" });
     return;
   }
 
-  // Structure type is genuinely activity-specific (a Raitaru only ever
-  // manufactures, an Athanor only ever reacts) so that filter stays
-  // required. Rigs aren't filtered by activity at all - a real structure's
-  // fitted rigs include plenty with nothing to do with either activity
-  // (combat, EWAR, mining, research), and the admin should be able to pick
-  // whatever's actually fitted regardless of which profile they're
-  // editing; a rig that's irrelevant to the job just contributes nothing.
-  if (kind === "structure") {
-    if (activity !== "manufacturing" && activity !== "reaction") {
-      res.status(400).json({ ok: false, message: "activity must be 'manufacturing' or 'reaction'" });
-      return;
-    }
-  }
-
+  // Not filtered by activity for either kind - an admin sets a structure
+  // up with whatever's actually fitted/real, not a pre-narrowed list of
+  // what the tool thinks is relevant to the profile they happen to be
+  // editing; anything that doesn't apply just contributes nothing.
   try {
-    const filter = kind === "structure" ? { kind, activity } : { kind };
-    const bonusTypes = await IndustryBonusType.find(filter).sort({ name: 1 });
+    const bonusTypes = await IndustryBonusType.find({ kind }).sort({ name: 1 });
     res.status(200).json({ ok: true, data: bonusTypes });
   } catch (err) {
     console.error("Failed to fetch industry bonus types:", err);
@@ -742,10 +730,9 @@ adminRouter.get("/industry-bonus-types", async (req, res) => {
 
 adminRouter.put("/structures/:structureId/industry-profile", async (req, res) => {
   const structureId = Number(req.params.structureId);
-  const { activity, structureTypeId, rigTypeIds, securityClass, facilityTaxPercent } = req.body ?? {};
+  const { activity, structureTypeId, rigTypeIds, facilityTaxPercent } = req.body ?? {};
 
   const validActivities = ["manufacturing", "reaction", "research", "copying", "invention"];
-  const validSecurityClasses = ["highsec", "lowsec", "nullsec", "wormhole"];
 
   if (!Number.isFinite(structureId)) {
     res.status(400).json({ ok: false, message: "A valid structureId is required" });
@@ -757,10 +744,6 @@ adminRouter.put("/structures/:structureId/industry-profile", async (req, res) =>
   }
   if (!Number.isFinite(Number(structureTypeId))) {
     res.status(400).json({ ok: false, message: "A valid structureTypeId is required" });
-    return;
-  }
-  if (!validSecurityClasses.includes(securityClass)) {
-    res.status(400).json({ ok: false, message: "Invalid securityClass" });
     return;
   }
 
@@ -780,7 +763,6 @@ adminRouter.put("/structures/:structureId/industry-profile", async (req, res) =>
       rigTypeIds: Array.isArray(rigTypeIds)
         ? rigTypeIds.map(Number).filter((id) => Number.isFinite(id))
         : [],
-      securityClass,
       facilityTaxPercent: facilityTaxPercent != null ? Number(facilityTaxPercent) : 0,
     };
 

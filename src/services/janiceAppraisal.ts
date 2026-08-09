@@ -1,6 +1,6 @@
 import { JaniceAppraisal } from "../types/types";
 
-function buildJaniceAppraisalUrl(pricing: "buy" | "sell"): string {
+function buildJaniceAppraisalUrl(pricing: "buy" | "sell" | "split"): string {
   return `https://janice.e-351.com/api/rest/v2/appraisal?market=2&pricing=${pricing}&pricingVariant=immediate`;
 }
 
@@ -12,7 +12,7 @@ function getApiKey(): string {
 
 export async function runJaniceAppraisal(
   itemsText: string,
-  pricing: "buy" | "sell" = "sell",
+  pricing: "buy" | "sell" | "split" = "sell",
 ): Promise<JaniceAppraisal> {
   const trimmed = itemsText.trim();
   if (!trimmed) throw new Error("itemsText is required");

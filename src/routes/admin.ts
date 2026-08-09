@@ -677,6 +677,117 @@ adminRouter.delete("/ship-categories/:id", async (req, res) => {
   }
 });
 
+// Manufacturing structures for the Manufacturing Planner tool - layered onto the
+// same Structure cache /structures/search and /structures/fetch already
+// populate (see below), not a separate collection. This route lists only
+// the structures an admin has actually attached an industry profile to.
+adminRouter.get("/structures/industry", async (_req, res) => {
+  try {
+    const structures = await Structure.find({ "industryProfiles.0": { $exists: true } }).select(
+      "structureId name systemName industryProfiles",
+    );
+    res.status(200).json({ ok: true, data: structures });
+  } catch (err) {
+    console.error("Failed to fetch industry structures:", err);
+    res.status(500).json({
+      ok: false,
+      message: "Failed to fetch industry structures",
+      error: err,
+    });
+  }
+});
+
+adminRouter.put("/structures/:structureId/industry-profile", async (req, res) => {
+  const structureId = Number(req.params.structureId);
+  const { activity, structureType, rigs, securityClass, materialReduction, timeReduction, costReduction } =
+    req.body ?? {};
+
+  const validActivities = ["manufacturing", "reaction", "research", "copying", "invention"];
+  const validSecurityClasses = ["highsec", "lowsec", "nullsec", "wormhole"];
+
+  if (!Number.isFinite(structureId)) {
+    res.status(400).json({ ok: false, message: "A valid structureId is required" });
+    return;
+  }
+  if (!validActivities.includes(activity)) {
+    res.status(400).json({ ok: false, message: "Invalid activity" });
+    return;
+  }
+  if (!structureType || typeof structureType !== "string") {
+    res.status(400).json({ ok: false, message: "structureType is required" });
+    return;
+  }
+  if (!validSecurityClasses.includes(securityClass)) {
+    res.status(400).json({ ok: false, message: "Invalid securityClass" });
+    return;
+  }
+
+  try {
+    const structure = await Structure.findOne({ structureId });
+    if (!structure) {
+      res.status(404).json({
+        ok: false,
+        message: "Structure not found - search or fetch it by ID first",
+      });
+      return;
+    }
+
+    const profile = {
+      activity,
+      structureType,
+      rigs: Array.isArray(rigs) ? rigs.filter((r) => typeof r === "string" && r.trim()) : [],
+      securityClass,
+      materialReduction: materialReduction != null ? Number(materialReduction) : null,
+      timeReduction: timeReduction != null ? Number(timeReduction) : null,
+      costReduction: costReduction != null ? Number(costReduction) : null,
+    };
+
+    const existingIndex = structure.industryProfiles.findIndex((p) => p.activity === activity);
+    if (existingIndex >= 0) {
+      structure.industryProfiles[existingIndex] = profile;
+    } else {
+      structure.industryProfiles.push(profile);
+    }
+
+    await structure.save();
+    res.status(200).json({ ok: true, data: structure });
+  } catch (err) {
+    console.error("Failed to save industry profile:", err);
+    res.status(500).json({
+      ok: false,
+      message: "Failed to save industry profile",
+      error: err,
+    });
+  }
+});
+
+adminRouter.delete("/structures/:structureId/industry-profile/:activity", async (req, res) => {
+  const structureId = Number(req.params.structureId);
+  const { activity } = req.params;
+
+  try {
+    const structure = await Structure.findOneAndUpdate(
+      { structureId },
+      { $pull: { industryProfiles: { activity } } },
+      { new: true },
+    );
+
+    if (!structure) {
+      res.status(404).json({ ok: false, message: "Structure not found" });
+      return;
+    }
+
+    res.status(200).json({ ok: true, data: structure });
+  } catch (err) {
+    console.error("Failed to delete industry profile:", err);
+    res.status(500).json({
+      ok: false,
+      message: "Failed to delete industry profile",
+      error: err,
+    });
+  }
+});
+
 // Handles both a free-form jump route and one restricted to known Keepstar
 // systems (the former "Keepstar Route Planner", now just this same endpoint
 // with restrictToKeepstars: true) - map data (bounds/systemsInView/

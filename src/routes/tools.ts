@@ -3,6 +3,7 @@ import { System } from "../models/System";
 import { ShipCategory } from "../models/ShipCategory";
 import { getKnownJumpBridgePairs, buildJumpBridgeExportText } from "../services/jumpBridgeExport";
 import { planJumpRoute } from "../services/jumpRoutePlanner";
+import toolsBuildRouter from "./toolsBuild";
 
 // Read-only surface for the corp-wide Tools app - every route here is
 // mounted behind requireToolsAuth (see index.ts). No discovery, no
@@ -103,5 +104,7 @@ toolsRouter.post("/jump-routes/plan", async (req, res) => {
     res.status(500).json({ ok: false, message: "Failed to plan jump route", error: err });
   }
 });
+
+toolsRouter.use("/build", toolsBuildRouter);
 
 export default toolsRouter;

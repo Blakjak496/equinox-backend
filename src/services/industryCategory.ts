@@ -87,7 +87,13 @@ const COMPONENT_GROUP_CATEGORY: Record<number, IndustryCategory> = {
   429: "composite_reaction", // Composite (T2 reaction output materials)
   974: "hybrid_reaction", // Hybrid Polymers (T3 reaction output materials)
   712: "biochemical_reaction", // Biochemical Material
-  1136: "any_reaction", // Fuel Block (basic/T1 reaction - no dedicated rig tier)
+
+  // Fuel Block is a MANUFACTURING product, not a reaction one (confirmed
+  // via the real "Standup XL-Set Structure and Component Manufacturing"
+  // rig's own description, which explicitly lists fuel blocks alongside
+  // structures/components) - despite being built from reaction materials,
+  // the fuel block job itself runs as activity: "manufacturing".
+  1136: "structure", // Fuel Block
 };
 
 // Whole invCategories map to one bonus category regardless of sub-group.

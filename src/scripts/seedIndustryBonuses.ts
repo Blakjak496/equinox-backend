@@ -33,36 +33,63 @@ const STRUCTURE_TYPE_NAMES: { name: string; activity: "manufacturing" | "reactio
 ];
 
 // Ordered, most-specific-first - matched against a real rig's own type
-// name. Confirmed against every actual "Standup [ML]-Set ...Efficiency..."
-// rig type in the live SDE (see seedIndustryBonuses.ts's PR/plan notes) -
-// this is the one genuinely hand-built piece (CCP doesn't expose rig
-// category scope as a queryable field), everything else here is read
-// straight from real data.
-const MANUFACTURING_PHRASES: [RegExp, IndustryCategory][] = [
-  [/Basic Small Ship/i, "basic_small_ship"],
-  [/Basic Medium Ship/i, "basic_medium_ship"],
-  [/Basic Large Ship/i, "basic_large_ship"],
-  [/Advanced Small Ship/i, "advanced_small_ship"],
-  [/Advanced Medium Ship/i, "advanced_medium_ship"],
-  [/Advanced Large Ship/i, "advanced_large_ship"],
-  [/Capital Ship/i, "capital_ship"],
-  [/Basic Capital Component/i, "basic_capital_component"],
-  [/Advanced Component/i, "advanced_component"],
-  [/Equipment/i, "equipment"],
-  [/Ammunition/i, "ammunition"],
-  [/Drone and Fighter/i, "drone_and_fighter"],
-  [/Structure Manufacturing/i, "structure"],
+// name. Confirmed against every actual "Standup [SML]-Set/XL-Set
+// ...Efficiency..." rig type in the live SDE - this is the one genuinely
+// hand-built piece (CCP doesn't expose rig category scope as a queryable
+// field), everything else here is read straight from real data. Most
+// entries map to a single category, but real "XL-Set" rigs consolidate
+// several into one rig (confirmed against their actual descriptions, not
+// guessed): "Ship Manufacturing Efficiency" (bare, no size/tier qualifier)
+// covers "any ship"; "Equipment and Consumable" covers ship modules/rigs,
+// personal deployables, implants and cargo containers (explicitly NOT
+// ammunition, per its real description); "Structure and Component" covers
+// components, Upwell structures, structure modules, starbase structures,
+// AND fuel blocks (which is why Fuel Block classifies as "structure", not
+// a reaction category, in industryCategory.ts - fuel blocks are a
+// manufacturing product, not a reaction one).
+const MANUFACTURING_PHRASES: [RegExp, IndustryCategory[]][] = [
+  [/Basic Small Ship/i, ["basic_small_ship"]],
+  [/Basic Medium Ship/i, ["basic_medium_ship"]],
+  [/Basic Large Ship/i, ["basic_large_ship"]],
+  [/Advanced Small Ship/i, ["advanced_small_ship"]],
+  [/Advanced Medium Ship/i, ["advanced_medium_ship"]],
+  [/Advanced Large Ship/i, ["advanced_large_ship"]],
+  [/Capital Ship/i, ["capital_ship"]],
+  [/Basic Capital Component/i, ["basic_capital_component"]],
+  [/Advanced Component/i, ["advanced_component"]],
+  [/Equipment and Consumable/i, ["equipment"]], // XL - covers no ammo, see header comment
+  [/Structure and Component/i, ["structure", "advanced_component", "basic_capital_component"]], // XL
+  [
+    /Ship Manufacturing/i, // XL, bare "any ship" - checked after every specific ship-size/tier phrase above
+    [
+      "basic_small_ship",
+      "basic_medium_ship",
+      "basic_large_ship",
+      "advanced_small_ship",
+      "advanced_medium_ship",
+      "advanced_large_ship",
+      "capital_ship",
+    ],
+  ],
+  [/Equipment/i, ["equipment"]],
+  [/Ammunition/i, ["ammunition"]],
+  [/Drone and Fighter/i, ["drone_and_fighter"]],
+  [/Structure Manufacturing/i, ["structure"]],
 ];
-const REACTION_PHRASES: [RegExp, IndustryCategory][] = [
-  [/Composite Reactor/i, "composite_reaction"],
-  [/Hybrid Reactor/i, "hybrid_reaction"],
-  [/Biochemical Reactor/i, "biochemical_reaction"],
-  [/Reactor Efficiency/i, "any_reaction"], // generic L-Set rig, no tier prefix
+const REACTION_PHRASES: [RegExp, IndustryCategory[]][] = [
+  [/Composite Reactor/i, ["composite_reaction"]],
+  [/Hybrid Reactor/i, ["hybrid_reaction"]],
+  [/Biochemical Reactor/i, ["biochemical_reaction"]],
+  // Generic L-Set rig, no tier prefix - explicitly covers every reaction
+  // category rather than relying on a resolver-side wildcard special case.
+  [/Reactor Efficiency/i, ["composite_reaction", "hybrid_reaction", "biochemical_reaction", "any_reaction"]],
 ];
 
-// Real rig names always start this way - "Blueprint" variants are
-// excluded by the caller before this ever gets checked.
-const RIG_NAME_PATTERN = /^Standup [ML]-Set (Thukker )?.*(Manufacturing|Reactor)/i;
+// Real rig names always start this way ("S-Set" doesn't currently exist in
+// the live SDE, but the pattern allows for it in case that changes) -
+// "Blueprint" variants are excluded by the caller before this ever gets
+// checked.
+const RIG_NAME_PATTERN = /^Standup (XL|[SML])-Set (Thukker )?.*(Manufacturing|Reactor)/i;
 
 type InvTypesRow = { typeID: string; groupID: string; typeName: string };
 type DgmTypeAttributeRow = {
@@ -85,10 +112,10 @@ async function fetchCsv<T>(filename: string): Promise<T[]> {
 function classifyRigCategory(
   name: string,
   activity: "manufacturing" | "reaction",
-): IndustryCategory | null {
+): IndustryCategory[] | null {
   const phrases = activity === "manufacturing" ? MANUFACTURING_PHRASES : REACTION_PHRASES;
-  for (const [pattern, category] of phrases) {
-    if (pattern.test(name)) return category;
+  for (const [pattern, categories] of phrases) {
+    if (pattern.test(name)) return categories;
   }
   return null;
 }
@@ -158,8 +185,10 @@ async function run() {
     const activity = STRUCTURE_TYPE_NAMES.find((s) => s.name === row.typeName)!.activity;
     const attrs = STRUCTURE_ATTRS[activity];
 
+    // Rounded to 4dp - (multiplier - 1) * 100 on a binary float (e.g. 0.99)
+    // otherwise leaves noise like -1.0000000000000009 instead of a clean -1.
     const toPercent = (multiplier: number | null) =>
-      multiplier == null ? null : (multiplier - 1) * 100;
+      multiplier == null ? null : Math.round((multiplier - 1) * 100 * 10000) / 10000;
 
     bonusTypeOps.push({
       updateOne: {
@@ -170,7 +199,7 @@ async function run() {
             name: row.typeName,
             kind: "structure" as const,
             activity,
-            category: null,
+            category: [],
             materialBonusPercent: toPercent(attributeValue(attrsByType, typeId, attrs.material)),
             timeBonusPercent: toPercent(attributeValue(attrsByType, typeId, attrs.time)),
             costBonusPercent: toPercent(attributeValue(attrsByType, typeId, attrs.cost)),

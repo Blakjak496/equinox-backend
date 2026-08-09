@@ -227,10 +227,12 @@ function bonusPercent(
 }
 
 // Combines a structure's flat bonus with whichever of its fitted rigs
-// actually apply to `category` (a rig with category "any_reaction" - the
-// generic L-Set reactor rig - applies to every reaction category) into one
-// multiplier, with EVE's real stacking penalty applied across same-type
-// rig bonuses (see industryBonus.ts).
+// actually cover `category` into one multiplier, with EVE's real stacking
+// penalty applied across same-type rig bonuses (see industryBonus.ts). A
+// rig's `category` is a list, not a single value - most rigs cover exactly
+// one, but real "XL-Set" rigs consolidate several (e.g. "any ship") into
+// one rig, and "any_reaction" (the generic L-Set reactor rig) is just
+// another category in that list rather than a separate special case.
 function combinedMultiplier(
   activityStructure: ActivityStructure,
   category: IndustryCategory | null,
@@ -238,7 +240,9 @@ function combinedMultiplier(
 ): number {
   const structurePercent = bonusPercent(activityStructure.structureBonus, field);
   const rigPercents = activityStructure.rigBonuses
-    .filter((rig) => category != null && (rig.category === category || rig.category === "any_reaction"))
+    .filter(
+      (rig) => category != null && (rig.category.includes(category) || rig.category.includes("any_reaction")),
+    )
     .map((rig) => bonusPercent(rig, field))
     .filter((p): p is number => p != null);
 

@@ -21,9 +21,13 @@ export interface IIndustryBonusTypeFields {
   name: string;
   kind: "structure" | "rig";
   activity: "manufacturing" | "reaction";
-  // null for structures (their bonus is flat/global, not category-scoped).
-  // Always set for rigs.
-  category: IndustryCategory | null;
+  // Empty for structures (their bonus is flat/global, not category-scoped -
+  // never read). One or more entries for rigs - almost always exactly one,
+  // but real "XL-Set" rigs consolidate several categories into a single
+  // rig (e.g. "any ship", or "equipment and consumables" covering both
+  // modules and ammo) rather than fitting one rig per category the way
+  // M-Set/L-Set do, confirmed against their real SDE descriptions.
+  category: IndustryCategory[];
   materialBonusPercent: number | null;
   timeBonusPercent: number | null;
   costBonusPercent: number | null;
@@ -37,7 +41,7 @@ const IndustryBonusTypeSchema = new Schema<IIndustryBonusType>(
     name: { type: String, required: true },
     kind: { type: String, enum: ["structure", "rig"], required: true },
     activity: { type: String, enum: ["manufacturing", "reaction"], required: true },
-    category: { type: String, default: null },
+    category: { type: [String], default: [] },
     materialBonusPercent: { type: Number, default: null },
     timeBonusPercent: { type: Number, default: null },
     costBonusPercent: { type: Number, default: null },

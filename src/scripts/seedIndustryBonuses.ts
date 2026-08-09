@@ -85,11 +85,18 @@ const REACTION_PHRASES: [RegExp, IndustryCategory[]][] = [
   [/Reactor Efficiency/i, ["composite_reaction", "hybrid_reaction", "biochemical_reaction", "any_reaction"]],
 ];
 
-// Real rig names always start this way ("S-Set" doesn't currently exist in
-// the live SDE, but the pattern allows for it in case that changes) -
-// "Blueprint" variants are excluded by the caller before this ever gets
-// checked.
-const RIG_NAME_PATTERN = /^Standup (XL|[SML])-Set (Thukker )?.*(Manufacturing|Reactor)/i;
+// Every real Standup structure rig, not just the manufacturing/reaction
+// ones - admins set structures up with whatever's *actually* fitted
+// (combat, EWAR, moon drilling, reprocessing, research/invention rigs
+// included), not just the ones this tool happens to use. A rig outside
+// classifyRigCategory's known phrases still gets an IndustryBonusType doc
+// (category: [], material/time/cost bonus percents: null, since it won't
+// carry the 2593-2595/2713-2714 attributes this script reads) - it just
+// never contributes anything in the resolver, exactly as if it weren't
+// listed at all. ("S-Set" doesn't currently exist in the live SDE, but the
+// pattern allows for it in case that changes.) "Blueprint" variants are
+// excluded by the caller before this ever gets checked.
+const RIG_NAME_PATTERN = /^Standup (XL|[SML])-Set /i;
 
 type InvTypesRow = { typeID: string; groupID: string; typeName: string };
 type DgmTypeAttributeRow = {
@@ -210,18 +217,20 @@ async function run() {
     });
   }
 
-  let skippedUnclassified = 0;
+  // Every real rig gets a doc, even ones with no known category (combat,
+  // EWAR, moon drilling, reprocessing, research/invention rigs) - they
+  // just end up with category: [] and null bonus percents (they don't
+  // carry the material/time/cost attributes this script reads), so they
+  // show up as pickable in the admin UI but never contribute anything in
+  // the resolver, matching what's actually fitted on a real structure.
+  let unclassifiedCount = 0;
   for (const row of rigCandidates) {
     const typeId = Number(row.typeID);
     const activity: "manufacturing" | "reaction" = /Reactor/i.test(row.typeName)
       ? "reaction"
       : "manufacturing";
-    const category = classifyRigCategory(row.typeName, activity);
-    if (!category) {
-      skippedUnclassified++;
-      console.warn(`Could not classify rig "${row.typeName}" (typeId=${typeId}) - skipping.`);
-      continue;
-    }
+    const category = classifyRigCategory(row.typeName, activity) ?? [];
+    if (category.length === 0) unclassifiedCount++;
 
     const attrs = RIG_ATTRS[activity];
     bonusTypeOps.push({
@@ -245,7 +254,7 @@ async function run() {
   }
 
   console.log(
-    `Built ${bonusTypeOps.length} IndustryBonusType docs (${skippedUnclassified} rigs skipped - unrecognized category phrase).`,
+    `Built ${bonusTypeOps.length} IndustryBonusType docs (${unclassifiedCount} rigs have no known material/time/cost category - e.g. combat/EWAR/mining/research rigs - included anyway, but inert in the resolver).`,
   );
 
   await mongoose.connect(uri);

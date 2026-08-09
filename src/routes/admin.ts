@@ -711,13 +711,24 @@ adminRouter.get("/industry-bonus-types", async (req, res) => {
     res.status(400).json({ ok: false, message: "kind must be 'structure' or 'rig'" });
     return;
   }
-  if (activity !== "manufacturing" && activity !== "reaction") {
-    res.status(400).json({ ok: false, message: "activity must be 'manufacturing' or 'reaction'" });
-    return;
+
+  // Structure type is genuinely activity-specific (a Raitaru only ever
+  // manufactures, an Athanor only ever reacts) so that filter stays
+  // required. Rigs aren't filtered by activity at all - a real structure's
+  // fitted rigs include plenty with nothing to do with either activity
+  // (combat, EWAR, mining, research), and the admin should be able to pick
+  // whatever's actually fitted regardless of which profile they're
+  // editing; a rig that's irrelevant to the job just contributes nothing.
+  if (kind === "structure") {
+    if (activity !== "manufacturing" && activity !== "reaction") {
+      res.status(400).json({ ok: false, message: "activity must be 'manufacturing' or 'reaction'" });
+      return;
+    }
   }
 
   try {
-    const bonusTypes = await IndustryBonusType.find({ kind, activity }).sort({ name: 1 });
+    const filter = kind === "structure" ? { kind, activity } : { kind };
+    const bonusTypes = await IndustryBonusType.find(filter).sort({ name: 1 });
     res.status(200).json({ ok: true, data: bonusTypes });
   } catch (err) {
     console.error("Failed to fetch industry bonus types:", err);

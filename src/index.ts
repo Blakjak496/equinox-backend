@@ -6,6 +6,7 @@ import cron from "node-cron";
 import { syncContracts } from "./services/syncContracts";
 import { updateRecommendedRatesForAllItems } from "./services/pricingRecommendation";
 import { syncCorpAssetStock } from "./services/corpAssetSync";
+import { refreshAdjustedPrices } from "./services/adjustedPrices";
 import { initConfig } from "./lib/config";
 import { initSystemCache } from "./lib/systemCache";
 import authRouter from "./routes/auth";
@@ -104,6 +105,15 @@ async function start() {
   // possible after each daily reset.
   cron.schedule("0 14 * * *", () => {
     syncCorpAssetStock();
+  });
+
+  // Same slot again - ESI's adjusted/average prices (the Manufacturing
+  // Planner's EIV basis) are also only refreshed once a day, so there's
+  // nothing to gain from polling more often than the other 2pm jobs.
+  cron.schedule("0 14 * * *", () => {
+    refreshAdjustedPrices().catch((err) =>
+      console.error("Failed to refresh adjusted prices:", err),
+    );
   });
 
   app.listen(PORT, () => {

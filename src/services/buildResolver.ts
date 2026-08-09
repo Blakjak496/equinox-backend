@@ -2,8 +2,13 @@ import { Blueprint } from "../models/Blueprint";
 import { Structure, IIndustryProfile } from "../models/Structure";
 import { Type } from "../models/Type";
 import { ToolsUser, IBuildStructurePreferences } from "../models/ToolsUser";
+import { IndustryBonusType, IIndustryBonusTypeFields } from "../models/IndustryBonusType";
 import { runJaniceAppraisal } from "./janiceAppraisal";
 import { getSystemCostIndex } from "./industryCostIndex";
+import { getAdjustedPrices } from "./adjustedPrices";
+import { classifyProductCategory } from "./industryCategory";
+import { combineStructureAndRigMultiplier } from "./industryBonus";
+import { IndustryCategory } from "../types/industryCategory";
 
 export type BuyPriceSource = "buy" | "split";
 
@@ -52,13 +57,24 @@ export type BuildResolveResult = {
 
 type PriceInfo = { unitPrice: number; m3PerUnit: number };
 
+// A structure's real, SDE-sourced bonus data for one activity - the
+// structure type's own flat bonus, plus whichever rigs are actually
+// fitted (each carrying its own category scope - see
+// models/IndustryBonusType.ts). Replaces v1's flat admin-typed
+// materialReduction/costReduction.
 type ActivityStructure = {
   structureId: number;
   systemId: number;
-  profile: IIndustryProfile;
+  facilityTaxPercent: number;
+  structureBonus: IIndustryBonusTypeFields | null;
+  rigBonuses: IIndustryBonusTypeFields[];
 };
 
 type StructuresByActivity = Partial<Record<"manufacturing" | "reaction", ActivityStructure>>;
+
+// Fixed, universal, not configurable - confirmed against EVE University's
+// job-cost formula.
+const SCC_SURCHARGE = 0.04;
 
 // Per-unit result of the memoized bottom-up resolve - unitCost/decision are
 // made once per typeId based purely on that item's own unit economics, per
@@ -160,9 +176,21 @@ async function loadStructuresByActivity(
 
     const structure = await Structure.findOne({ structureId }).lean();
     const profile = structure?.industryProfiles.find((p) => p.activity === activity);
-    if (structure?.systemId && profile) {
-      result[activity] = { structureId, systemId: structure.systemId, profile };
-    }
+    if (!structure?.systemId || !profile) continue;
+
+    const bonusTypeIds = [profile.structureTypeId, ...profile.rigTypeIds];
+    const bonusTypes = await IndustryBonusType.find({ typeId: { $in: bonusTypeIds } }).lean();
+    const byTypeId = new Map(bonusTypes.map((b) => [b.typeId, b]));
+
+    result[activity] = {
+      structureId,
+      systemId: structure.systemId,
+      facilityTaxPercent: (profile as IIndustryProfile).facilityTaxPercent ?? 0,
+      structureBonus: byTypeId.get(profile.structureTypeId) ?? null,
+      rigBonuses: profile.rigTypeIds
+        .map((id) => byTypeId.get(id))
+        .filter((b) => b !== undefined) as IIndustryBonusTypeFields[],
+    };
   }
 
   return result;
@@ -188,10 +216,40 @@ function getBuyPrice(
   return price.unitPrice + price.m3PerUnit * haulRatePerM3;
 }
 
+function bonusPercent(
+  bonus: IIndustryBonusTypeFields | null | undefined,
+  field: "material" | "time" | "cost",
+): number | null {
+  if (!bonus) return null;
+  if (field === "material") return bonus.materialBonusPercent;
+  if (field === "time") return bonus.timeBonusPercent;
+  return bonus.costBonusPercent;
+}
+
+// Combines a structure's flat bonus with whichever of its fitted rigs
+// actually apply to `category` (a rig with category "any_reaction" - the
+// generic L-Set reactor rig - applies to every reaction category) into one
+// multiplier, with EVE's real stacking penalty applied across same-type
+// rig bonuses (see industryBonus.ts).
+function combinedMultiplier(
+  activityStructure: ActivityStructure,
+  category: IndustryCategory | null,
+  field: "material" | "time" | "cost",
+): number {
+  const structurePercent = bonusPercent(activityStructure.structureBonus, field);
+  const rigPercents = activityStructure.rigBonuses
+    .filter((rig) => category != null && (rig.category === category || rig.category === "any_reaction"))
+    .map((rig) => bonusPercent(rig, field))
+    .filter((p): p is number => p != null);
+
+  return combineStructureAndRigMultiplier(structurePercent, rigPercents);
+}
+
 async function resolve(
   typeId: number,
   cache: Map<number, ResolvedNode>,
   prices: Map<number, PriceInfo>,
+  adjustedPrices: Map<number, number>,
   nameByTypeId: Map<number, string>,
   structuresByActivity: StructuresByActivity,
   assumedME: number,
@@ -223,24 +281,31 @@ async function resolve(
     return node;
   }
 
-  // materialReduction/timeReduction/costReduction and assumedME are all
-  // entered and stored as percentages (e.g. 2 = 2%), so every multiplier
-  // below divides by 100 - the brief's own pseudocode treats them as
-  // already-fractional (0-1), but percentages are what the admin form and
-  // the Manufacturing Planner's ME input actually take.
+  const category = await classifyProductCategory(typeId);
+
+  // assumedME is entered/stored as a percentage (e.g. 10 = 10%), so this
+  // divides by 100 same as every other bonus below.
   const meMultiplier = blueprint.activity === "reaction" ? 1 : 1 - assumedME / 100;
-  const rigMultiplier = 1 - (structureEntry.profile.materialReduction ?? 0) / 100;
+  const materialMultiplier = combinedMultiplier(structureEntry, category, "material");
 
   const children: { childTypeId: number; quantityPerUnit: number }[] = [];
   let materialUnitCost = 0;
+  // Estimated Item Value (EIV) per run - the blueprint's own direct
+  // materials at their RAW (ME 0, unbonused) base quantity priced at each
+  // material's ESI-published adjusted price. Deliberately not recursive
+  // and not ME/rig-adjusted - this is CCP's fixed basis for the job
+  // installation fee, a different number from materialUnitCost (which IS
+  // ME/rig-adjusted and Janice-priced - "what you actually pay").
+  let eivPerRun = 0;
 
   for (const material of blueprint.materials) {
     const perOutputQty =
-      Math.ceil(material.quantity * meMultiplier * rigMultiplier) / blueprint.outputQuantity;
+      Math.ceil(material.quantity * meMultiplier * materialMultiplier) / blueprint.outputQuantity;
     const childNode = await resolve(
       material.typeId,
       cache,
       prices,
+      adjustedPrices,
       nameByTypeId,
       structuresByActivity,
       assumedME,
@@ -249,11 +314,16 @@ async function resolve(
     );
     children.push({ childTypeId: material.typeId, quantityPerUnit: perOutputQty });
     materialUnitCost += childNode.unitCost * perOutputQty;
+
+    eivPerRun += material.quantity * (adjustedPrices.get(material.typeId) ?? 0);
   }
 
+  const eivPerUnit = eivPerRun / blueprint.outputQuantity;
+  const costMultiplier = combinedMultiplier(structureEntry, category, "cost");
   const costIndex = await getSystemCostIndex(structureEntry.systemId, blueprint.activity);
-  const jobUnitCost =
-    materialUnitCost * costIndex * (1 - (structureEntry.profile.costReduction ?? 0) / 100);
+  const facilityTaxRate = structureEntry.facilityTaxPercent / 100;
+
+  const jobUnitCost = eivPerUnit * (costIndex * costMultiplier + facilityTaxRate + SCC_SURCHARGE);
   const buildUnitCost = materialUnitCost + jobUnitCost;
   const decision: "build" | "buy" = buildUnitCost < buyPrice ? "build" : "buy";
 
@@ -338,7 +408,10 @@ export async function resolveBuildPlan(input: ResolveInput): Promise<BuildResolv
   const types = await Type.find({ typeId: { $in: [...treeTypeIds] } }).lean();
   const nameByTypeId = new Map(types.map((t) => [t.typeId, t.name]));
 
-  const prices = await getPrices([...treeTypeIds], nameByTypeId, buyPriceSource);
+  const [prices, adjustedPrices] = await Promise.all([
+    getPrices([...treeTypeIds], nameByTypeId, buyPriceSource),
+    getAdjustedPrices([...treeTypeIds]),
+  ]);
 
   const toolsUser = await ToolsUser.findOne({ characterId }).lean();
   const structuresByActivity = await loadStructuresByActivity(
@@ -351,6 +424,7 @@ export async function resolveBuildPlan(input: ResolveInput): Promise<BuildResolv
     targetTypeId,
     cache,
     prices,
+    adjustedPrices,
     nameByTypeId,
     structuresByActivity,
     assumedME,
@@ -394,4 +468,3 @@ export async function resolveBuildPlan(input: ResolveInput): Promise<BuildResolv
     warnings: [...warnings],
   };
 }
-

@@ -11,17 +11,27 @@ interface IPosition {
 // rather than a separate collection, since it's the exact same physical
 // structure either way. One entry per activity (a structure rigged for both
 // manufacturing and reaction gets two entries here), maintained manually by
-// an admin via the Build Structures admin page - structures rarely change,
-// and individual corp members should never need to figure out rig bonuses
-// themselves (see src/routes/toolsBuild.ts).
+// an admin via the Build Structures admin page.
+//
+// structureTypeId/rigTypeIds reference real EVE types (-> IndustryBonusType,
+// see models/IndustryBonusType.ts) rather than storing bonus numbers
+// directly - the admin only needs to know *what's physically fitted*
+// (readable off the structure in-game), the actual bonus values are looked
+// up live from real SDE data at resolve time (services/buildResolver.ts),
+// category-scoped per item and combined with EVE's real stacking penalty
+// (services/industryBonus.ts). A flat admin-typed % was tried in v1 and
+// found to be wrong - rig bonuses only apply to specific production
+// categories, so one flat number can't be correct for everything a
+// structure builds.
 export interface IIndustryProfile {
   activity: "manufacturing" | "reaction" | "research" | "copying" | "invention";
-  structureType: string; // Sotiyo, Azbel, Athanor, Tatara, etc.
-  rigs: string[];
+  structureTypeId: number; // -> IndustryBonusType (kind: "structure")
+  rigTypeIds: number[]; // -> IndustryBonusType (kind: "rig"), each a real fitted rig
   securityClass: "highsec" | "lowsec" | "nullsec" | "wormhole";
-  materialReduction: number | null;
-  timeReduction: number | null;
-  costReduction: number | null;
+  // Facility tax rate (%) the structure owner has set in-game - not
+  // derivable from SDE/ESI, feeds into the EIV-based job cost formula
+  // alongside the fixed SCC surcharge (see buildResolver.ts).
+  facilityTaxPercent: number;
 }
 
 export interface IStructure extends Document {
@@ -45,16 +55,14 @@ const IndustryProfileSchema = new Schema<IIndustryProfile>(
       enum: ["manufacturing", "reaction", "research", "copying", "invention"],
       required: true,
     },
-    structureType: { type: String, required: true },
-    rigs: { type: [String], default: [] },
+    structureTypeId: { type: Number, required: true },
+    rigTypeIds: { type: [Number], default: [] },
     securityClass: {
       type: String,
       enum: ["highsec", "lowsec", "nullsec", "wormhole"],
       required: true,
     },
-    materialReduction: { type: Number, default: null },
-    timeReduction: { type: Number, default: null },
-    costReduction: { type: Number, default: null },
+    facilityTaxPercent: { type: Number, required: true, default: 0 },
   },
   { _id: false },
 );

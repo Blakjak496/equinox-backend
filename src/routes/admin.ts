@@ -13,6 +13,7 @@ import { BuybackQuote } from "../models/BuybackQuote";
 import { BuybackLocation } from "../models/BuybackLocation";
 import { BuyOrder } from "../models/BuyOrder";
 import { Structure } from "../models/Structure";
+import { IndustryBonusType } from "../models/IndustryBonusType";
 import { Station } from "../models/Station";
 import { computeAvailableQuantities } from "../services/buyOrder";
 import { syncCorpAssetStock } from "../services/corpAssetSync";
@@ -697,10 +698,40 @@ adminRouter.get("/structures/industry", async (_req, res) => {
   }
 });
 
+// Lists the real EVE structure/rig types an admin can pick from when
+// building an industry profile - backed by IndustryBonusType (seeded from
+// the SDE by seed:industry-bonuses), never hand-entered. See
+// models/IndustryBonusType.ts for why bonus numbers live here instead of
+// on the profile itself.
+adminRouter.get("/industry-bonus-types", async (req, res) => {
+  const kind = req.query.kind as string | undefined;
+  const activity = req.query.activity as string | undefined;
+
+  if (kind !== "structure" && kind !== "rig") {
+    res.status(400).json({ ok: false, message: "kind must be 'structure' or 'rig'" });
+    return;
+  }
+  if (activity !== "manufacturing" && activity !== "reaction") {
+    res.status(400).json({ ok: false, message: "activity must be 'manufacturing' or 'reaction'" });
+    return;
+  }
+
+  try {
+    const bonusTypes = await IndustryBonusType.find({ kind, activity }).sort({ name: 1 });
+    res.status(200).json({ ok: true, data: bonusTypes });
+  } catch (err) {
+    console.error("Failed to fetch industry bonus types:", err);
+    res.status(500).json({
+      ok: false,
+      message: "Failed to fetch industry bonus types",
+      error: err,
+    });
+  }
+});
+
 adminRouter.put("/structures/:structureId/industry-profile", async (req, res) => {
   const structureId = Number(req.params.structureId);
-  const { activity, structureType, rigs, securityClass, materialReduction, timeReduction, costReduction } =
-    req.body ?? {};
+  const { activity, structureTypeId, rigTypeIds, securityClass, facilityTaxPercent } = req.body ?? {};
 
   const validActivities = ["manufacturing", "reaction", "research", "copying", "invention"];
   const validSecurityClasses = ["highsec", "lowsec", "nullsec", "wormhole"];
@@ -713,8 +744,8 @@ adminRouter.put("/structures/:structureId/industry-profile", async (req, res) =>
     res.status(400).json({ ok: false, message: "Invalid activity" });
     return;
   }
-  if (!structureType || typeof structureType !== "string") {
-    res.status(400).json({ ok: false, message: "structureType is required" });
+  if (!Number.isFinite(Number(structureTypeId))) {
+    res.status(400).json({ ok: false, message: "A valid structureTypeId is required" });
     return;
   }
   if (!validSecurityClasses.includes(securityClass)) {
@@ -734,12 +765,12 @@ adminRouter.put("/structures/:structureId/industry-profile", async (req, res) =>
 
     const profile = {
       activity,
-      structureType,
-      rigs: Array.isArray(rigs) ? rigs.filter((r) => typeof r === "string" && r.trim()) : [],
+      structureTypeId: Number(structureTypeId),
+      rigTypeIds: Array.isArray(rigTypeIds)
+        ? rigTypeIds.map(Number).filter((id) => Number.isFinite(id))
+        : [],
       securityClass,
-      materialReduction: materialReduction != null ? Number(materialReduction) : null,
-      timeReduction: timeReduction != null ? Number(timeReduction) : null,
-      costReduction: costReduction != null ? Number(costReduction) : null,
+      facilityTaxPercent: facilityTaxPercent != null ? Number(facilityTaxPercent) : 0,
     };
 
     const existingIndex = structure.industryProfiles.findIndex((p) => p.activity === activity);

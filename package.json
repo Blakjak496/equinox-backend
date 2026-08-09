@@ -11,6 +11,7 @@
     "seed:config": "ts-node src/scripts/seedConfig.ts",
     "seed:systems": "ts-node src/scripts/seedSystems.ts",
     "seed:blueprints": "ts-node src/scripts/seedBlueprints.ts",
+    "seed:industry-bonuses": "ts-node src/scripts/seedIndustryBonuses.ts",
     "seed:buyback-categories": "ts-node src/scripts/seedBuybackCategories.ts",
     "seed:buyback-groups": "ts-node src/scripts/seedBuybackGroups.ts",
     "seed:buyback-items": "ts-node src/scripts/seedBuybackItems.ts",

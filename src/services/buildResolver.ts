@@ -312,6 +312,20 @@ function combinedMultiplier(
 // PoolOverride.materialsSubtree) so a consuming parent's own materialUnitCost
 // sum picks up the pooled rate without re-deriving or re-charging for the
 // batch's materials itself.
+//
+// forceBuild - set only on the single top-level call for the plan's own
+// target item (never threaded down into the materials recursion below, so
+// it has no effect on any component's own decision). Some items - low-
+// liquidity supercapitals being the motivating case - have a handful of
+// wildly unrepresentative market orders that make "buy" win the comparison
+// even though nobody could realistically source one that way. The user is
+// explicitly asking this tool to plan how to BUILD the target, so its own
+// decision skips the price comparison entirely and always shows the build
+// breakdown (as long as a blueprint and a structure for its activity both
+// exist - forceBuild never fabricates a build path that isn't actually
+// there). The buy price is still computed and returned either way, so
+// resolveBuildPlan can surface "buying instead would cost X" without the
+// decision engine itself being swayed by it.
 async function resolve(
   typeId: number,
   cache: Map<number, ResolvedNode>,
@@ -323,6 +337,7 @@ async function resolve(
   haulRatePerM3: number,
   warnings: Set<string>,
   poolOverrides: Map<number, PoolOverride>,
+  forceBuild = false,
 ): Promise<ResolvedNode> {
   const cached = cache.get(typeId);
   if (cached) return cached;
@@ -408,7 +423,7 @@ async function resolve(
   const sccSurcharge = SCC_SURCHARGE_BY_ACTIVITY[blueprint.activity];
   const jobUnitCost = eivPerUnit * (costIndex * costMultiplier + facilityTaxRate + sccSurcharge);
   const buildUnitCost = materialUnitCost + jobUnitCost;
-  const decision: "build" | "buy" = buildUnitCost < buyPrice ? "build" : "buy";
+  const decision: "build" | "buy" = forceBuild || buildUnitCost < buyPrice ? "build" : "buy";
 
   const node: ResolvedNode = {
     typeId,
@@ -456,6 +471,14 @@ function logDemand(demandLog: DemandLog, typeId: number, demand: number, subtota
 // regardless of decision, whether or not it's already pooled - resolveBuildPlan
 // uses this after each pass to look for NEW pooling opportunities (or
 // confirm there are none left, ending the round loop).
+//
+// skipDemandCheck - set only on the single top-level call for the plan's
+// own target item (never propagated into the children recursion below),
+// mirroring resolve()'s forceBuild - see that function's header comment
+// for why. Without this, a target item that resolve() forced to "build"
+// could still get silently downgraded back to "buy" right here if its own
+// batch size doesn't evenly divide the requested quantity, quietly
+// reintroducing the exact problem forceBuild exists to avoid.
 function buildRealTree(
   typeId: number,
   rawQuantity: number,
@@ -464,6 +487,7 @@ function buildRealTree(
   warnings: Set<string>,
   poolOverrides: Map<number, PoolOverride>,
   demandLog: DemandLog,
+  skipDemandCheck = false,
 ): BuildTreeNode {
   const node = cache.get(typeId);
   const name = nameByTypeId.get(typeId) ?? `Type ${typeId}`;
@@ -495,7 +519,7 @@ function buildRealTree(
   const realBuildCost = realBuildQuantity * node.unitCost;
   const realBuyCost = rawQuantity * node.buyPrice;
 
-  if (realBuildCost >= realBuyCost) {
+  if (!skipDemandCheck && realBuildCost >= realBuyCost) {
     // Idealized full-batch build looked cheaper, but the batch this
     // specific demand would actually force (realBuildQuantity, likely
     // larger than what's needed) costs more than just buying the real
@@ -694,10 +718,20 @@ export async function resolveBuildPlan(input: ResolveInput): Promise<BuildResolv
       haulRatePerM3,
       warnings,
       poolOverrides,
+      true, // forceBuild - the plan's own target always shows how it's built, see resolve()'s header comment
     );
 
     const demandLog: DemandLog = new Map();
-    tree = buildRealTree(targetTypeId, quantity, cache, nameByTypeId, warnings, poolOverrides, demandLog);
+    tree = buildRealTree(
+      targetTypeId,
+      quantity,
+      cache,
+      nameByTypeId,
+      warnings,
+      poolOverrides,
+      demandLog,
+      true, // skipDemandCheck - matches forceBuild above, see buildRealTree's header comment
+    );
 
     const newOverrides = await detectPoolingOpportunities(
       demandLog,
@@ -754,6 +788,20 @@ export async function resolveBuildPlan(input: ResolveInput): Promise<BuildResolv
     (sum, entry) => sum + entry.volumeM3 * entry.quantity,
     0,
   );
+
+  // The target's own decision is forced to "build" above regardless of its
+  // market buy price (see resolve()'s forceBuild) - surface that comparison
+  // explicitly here rather than leaving it implicit in the summary stats,
+  // so a forced build that's actually pricier than buying doesn't go
+  // unnoticed. Only fires when buying really would be cheaper - most items
+  // won't hit this, since forceBuild only overrides the decision, not the
+  // underlying economics.
+  if (totalBuyEverythingCost > 0 && totalBuildCost > totalBuyEverythingCost) {
+    const percentMore = ((totalBuildCost - totalBuyEverythingCost) / totalBuyEverythingCost) * 100;
+    warnings.add(
+      `Buying ${resolvedTree.name} directly would cost ${totalBuyEverythingCost.toLocaleString(undefined, { maximumFractionDigits: 2 })} ISK - building it costs ${percentMore.toFixed(1)}% more, likely an illiquid/unreliable market price for an item this size. The build breakdown below is shown regardless, since that's what this tool is for.`,
+    );
+  }
 
   const jobCount =
     countBuildNodes(resolvedTree) +

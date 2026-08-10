@@ -36,11 +36,11 @@ export type ResolveInput = {
 // show it differently and so job/shopping-list counting doesn't double up
 // a batch that's really only produced once. quantity/unitCost/subtotal are
 // still THIS occurrence's own share (its own demand × the pooled fair-
-// share rate) - children and the pool* fields below describe the shared
-// batch as a whole (same for every occurrence of this typeId), purely so
-// it can be inspected/expanded from wherever it shows up; see
-// accumulateShoppingList for why these children are never double-counted
-// even though every occurrence carries a copy of them.
+// share rate); the pool* fields below summarize the shared batch as a
+// whole (same numbers at every occurrence of this typeId) as an inline
+// note. An occurrence itself never carries children - showing the same
+// real breakdown at every place an item is pooled would just repeat it;
+// see resolveBuildPlan's pooledBatches for the one, real, drillable copy.
 //
 // "hybrid" - demand doesn't divide evenly into whole batches, and the
 // optimal answer is neither "build all of it" (round up and waste part of
@@ -62,9 +62,19 @@ export type BuildTreeNode = {
   // "pooled" only - the shared batch's totals across ALL occurrences
   // combined (poolBuildQuantity + poolBuyQuantity = poolTotalQuantity),
   // distinct from this one occurrence's own (much smaller) quantity above.
+  // An occurrence in the MAIN tree carries these numbers but no children -
+  // see resolveBuildPlan's pooledBatches, the one place each pooled item's
+  // real breakdown is actually shown.
   poolTotalQuantity?: number;
   poolBuildQuantity?: number;
   poolBuyQuantity?: number;
+  // Set on "build"/"hybrid" nodes only - this node's own real EIV-based
+  // job/installation fee (buildQuantity × jobUnitCost, see ResolvedNode),
+  // already folded into subtotal above like everything else, broken out
+  // here purely so it can be summed and shown on its own (see
+  // resolveBuildPlan's totalJobCost) rather than being invisibly buried in
+  // a blended unit cost.
+  jobCost?: number;
   children?: BuildTreeNode[];
 };
 
@@ -86,8 +96,18 @@ export type BuildResolveResult = {
     percentSaved: number;
     jobCount: number;
     totalBuyVolumeM3: number;
+    // Sum of every real EIV-based job/installation fee actually paid
+    // across the whole plan (main tree + every pooled batch) - already
+    // folded into totalBuildCost like any other cost, broken out here so
+    // it isn't invisible inside a blended build cost figure.
+    totalJobCost: number;
   };
   tree: BuildTreeNode;
+  // One entry per pooled typeId (see BuildTreeNode's "pooled" comment) -
+  // the actual, drillable breakdown of what each shared batch builds
+  // (children) and buys (poolBuyQuantity), shown ONCE here rather than
+  // duplicated at every occurrence in the main tree above.
+  pooledBatches: BuildTreeNode[];
   shoppingList: ShoppingListEntry[];
   warnings: string[];
 };
@@ -607,11 +627,15 @@ function buildRealTree(
   if (poolOverrides.has(typeId)) {
     // resolve() already substituted unitCost = the pooled fair-share rate
     // for this typeId - no batch re-check needed (outputQuantity is 1 on
-    // the override's synthetic node). children/pool* below are the shared
-    // batch's own breakdown, attached for display/drill-down only - the
-    // batch's real cost is already counted exactly once via
-    // PoolOverride.materialsSubtree in resolveBuildPlan, not per-occurrence
-    // (see accumulateShoppingList's explicit guard for "pooled").
+    // the override's synthetic node). pool* below is the shared batch's
+    // own totals, shown inline as a note - but NOT its children: this
+    // typeId can appear at several places in the tree, and attaching the
+    // same real breakdown at every one of them would show the identical
+    // subtree over and over. The one real, drillable copy lives in
+    // resolveBuildPlan's pooledBatches instead. The batch's real cost is
+    // already counted exactly once via PoolOverride.materialsSubtree in
+    // resolveBuildPlan, not per-occurrence (see accumulateShoppingList's
+    // explicit guard for "pooled").
     const override = poolOverrides.get(typeId)!;
     const subtotal = node.unitCost * rawQuantity;
     logDemand(demandLog, typeId, rawQuantity, subtotal);
@@ -625,7 +649,6 @@ function buildRealTree(
       poolTotalQuantity: override.materialsSubtree.quantity + override.buyQuantity,
       poolBuildQuantity: override.materialsSubtree.quantity,
       poolBuyQuantity: override.buyQuantity,
-      children: override.materialsSubtree.children,
     };
   }
 
@@ -660,7 +683,8 @@ function buildRealTree(
     // (see the long comment on ResolvedNode.jobUnitCost for why job cost
     // alone is still safe to take from the idealized pass).
     const realMaterialCost = (children ?? []).reduce((sum, child) => sum + child.subtotal, 0);
-    const realBuildCost = realMaterialCost + realBuildQuantity * node.jobUnitCost;
+    const jobCost = realBuildQuantity * node.jobUnitCost;
+    const realBuildCost = realMaterialCost + jobCost;
     logDemand(demandLog, typeId, rawQuantity, realBuildCost);
     return {
       typeId,
@@ -669,6 +693,7 @@ function buildRealTree(
       quantity: realBuildQuantity,
       unitCost: realBuildQuantity > 0 ? realBuildCost / realBuildQuantity : 0,
       subtotal: realBuildCost,
+      jobCost,
       children,
     };
   }
@@ -720,7 +745,8 @@ function buildRealTree(
   // split.totalCost's idealized figure. The bought portion (buyQuantity,
   // if any) is already a real number as-is.
   const realMaterialCost = (children ?? []).reduce((sum, child) => sum + child.subtotal, 0);
-  const realBuildPortionCost = realMaterialCost + split.buildQuantity * node.jobUnitCost;
+  const jobCost = split.buildQuantity * node.jobUnitCost; // only the built portion incurs a job fee - bought units are just purchased
+  const realBuildPortionCost = realMaterialCost + jobCost;
   const realTotalCost = realBuildPortionCost + split.buyQuantity * node.buyPrice;
   const pureBuyCost = rawQuantity * node.buyPrice;
 
@@ -748,6 +774,7 @@ function buildRealTree(
       quantity: split.buildQuantity,
       unitCost: realBuildPortionCost / split.buildQuantity,
       subtotal: realBuildPortionCost,
+      jobCost,
       children,
     };
   }
@@ -763,6 +790,7 @@ function buildRealTree(
     subtotal: realTotalCost,
     buyQuantity: split.buyQuantity,
     buyUnitCost: node.buyPrice,
+    jobCost,
     children,
   };
 }
@@ -908,14 +936,13 @@ function accumulateShoppingList(
     );
   }
 
-  // "pooled" nodes now carry a COPY of the shared batch's children for
-  // display/drill-down (see buildRealTree) - every occurrence of a pooled
-  // typeId carries the same copy, so recursing into them here would count
-  // the shared batch's materials once per occurrence instead of once
-  // total. The batch's real cost is already folded into the shopping list
-  // exactly once via PoolOverride.materialsSubtree in resolveBuildPlan, so
-  // this stops here rather than falling through to the generic recursion
-  // below.
+  // "pooled" occurrences in the main tree carry no children at all (see
+  // buildRealTree) - the real, drillable breakdown lives only in
+  // resolveBuildPlan's pooledBatches, which is what this guard actually
+  // protects: pooledBatches entries DO carry children (a copy of the
+  // shared batch's own materials, folded into the shopping list exactly
+  // once via PoolOverride.materialsSubtree, separately, in
+  // resolveBuildPlan) - recursing into them here too would double it.
   if (node.decision === "pooled") return;
 
   for (const child of node.children ?? []) {
@@ -928,6 +955,16 @@ function countBuildNodes(node: BuildTreeNode): number {
   let count = 1;
   for (const child of node.children ?? []) count += countBuildNodes(child);
   return count;
+}
+
+// Same walk/shape as countBuildNodes - "pooled" occurrences carry no
+// children (see buildRealTree) and no jobCost of their own, so they
+// contribute nothing here; the pooled batch's own job cost is picked up
+// once, via its materialsSubtree, exactly like its build-node count.
+function sumJobCost(node: BuildTreeNode): number {
+  let total = node.jobCost ?? 0;
+  for (const child of node.children ?? []) total += sumJobCost(child);
+  return total;
 }
 
 export async function resolveBuildPlan(input: ResolveInput): Promise<BuildResolveResult> {
@@ -1039,11 +1076,20 @@ export async function resolveBuildPlan(input: ResolveInput): Promise<BuildResolv
   // leftover demand the pool didn't build (buyQuantity - combined demand
   // that didn't divide evenly into whole batches) is bought directly and
   // isn't part of materialsSubtree at all, so it needs its own entry too.
+  //
+  // pooledBatches - one self-contained node per pooled typeId, built here
+  // rather than reusing materialsSubtree as-is, since materialsSubtree
+  // only covers what was BUILT - this also folds in the bought remainder
+  // (poolBuyQuantity) so the whole shared batch (built + bought) is
+  // visible as a single entry, matching what each occurrence's inline
+  // pool* note already summarizes (see buildRealTree).
+  const pooledBatches: BuildTreeNode[] = [];
   for (const [typeId, override] of poolOverrides) {
     accumulateShoppingList(override.materialsSubtree, prices, shoppingListMap);
+    const name = nameByTypeId.get(typeId) ?? `Type ${typeId}`;
+    let buyPrice = 0;
     if (override.buyQuantity > 0) {
-      const name = nameByTypeId.get(typeId) ?? `Type ${typeId}`;
-      const buyPrice = getBuyPrice(typeId, name, prices, haulRatePerM3, warnings);
+      buyPrice = getBuyPrice(typeId, name, prices, haulRatePerM3, warnings);
       addShoppingListEntry(
         shoppingListMap,
         typeId,
@@ -1054,6 +1100,20 @@ export async function resolveBuildPlan(input: ResolveInput): Promise<BuildResolv
         prices.get(typeId)?.m3PerUnit ?? 0,
       );
     }
+
+    const poolTotalQuantity = override.materialsSubtree.quantity + override.buyQuantity;
+    pooledBatches.push({
+      typeId,
+      name,
+      decision: "pooled",
+      quantity: poolTotalQuantity,
+      unitCost: override.unitCostPerDemand,
+      subtotal: override.unitCostPerDemand * poolTotalQuantity,
+      poolTotalQuantity,
+      poolBuildQuantity: override.materialsSubtree.quantity,
+      poolBuyQuantity: override.buyQuantity,
+      children: override.materialsSubtree.children,
+    });
   }
 
   const totalBuildCost = resolvedTree.subtotal;
@@ -1109,6 +1169,10 @@ export async function resolveBuildPlan(input: ResolveInput): Promise<BuildResolv
     countBuildNodes(resolvedTree) +
     [...poolOverrides.values()].reduce((sum, o) => sum + countBuildNodes(o.materialsSubtree), 0);
 
+  const totalJobCost =
+    sumJobCost(resolvedTree) +
+    [...poolOverrides.values()].reduce((sum, o) => sum + sumJobCost(o.materialsSubtree), 0);
+
   return {
     target: { typeId: targetTypeId, name: resolvedTree.name, quantity: resolvedTree.quantity },
     summary: {
@@ -1121,8 +1185,10 @@ export async function resolveBuildPlan(input: ResolveInput): Promise<BuildResolv
           : 0,
       jobCount,
       totalBuyVolumeM3,
+      totalJobCost,
     },
     tree: resolvedTree,
+    pooledBatches,
     shoppingList: [...shoppingListMap.values()].sort((a, b) => b.subtotal - a.subtotal),
     warnings: [...warnings],
   };

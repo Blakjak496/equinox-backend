@@ -10,13 +10,21 @@ import { classifyProductCategory } from "./industryCategory";
 import { combineStructureAndRigMultiplier } from "./industryBonus";
 import { IndustryCategory } from "../types/industryCategory";
 
-export type BuyPriceSource = "buy" | "split";
+export type PriceSource = "buy" | "sell";
 
 export type ResolveInput = {
   targetTypeId: number;
   quantity: number;
   assumedME: number; // percent, e.g. 10 - manufacturing only, never applies to reaction
-  buyPriceSource: BuyPriceSource;
+  // Priced independently - a serious manufacturer typically stands up buy
+  // orders for materials (paying the lower buy price) but sells their
+  // output at the going sell price, so the two sides of the same resolve
+  // are rarely the same market side. materialPriceSource prices every
+  // material/component in the tree; productPriceSource prices only the
+  // target item's own informational market-alternative value (see
+  // resolve()'s forceBuild) - it never affects any build-vs-buy decision.
+  materialPriceSource: PriceSource;
+  productPriceSource: PriceSource;
   haulRatePerM3: number;
   characterId: string;
 };
@@ -27,13 +35,24 @@ export type ResolveInput = {
 // occurrence has its own dedicated, independent production) so the UI can
 // show it differently and so job/shopping-list counting doesn't double up
 // a batch that's really only produced once.
+//
+// "hybrid" - demand doesn't divide evenly into whole batches, and the
+// optimal answer is neither "build all of it" (round up and waste part of
+// an extra batch) nor "buy all of it" (ignore the full batches that ARE
+// worth producing) - some whole batches get built, and whatever's left
+// over (too little to justify one more full batch) is bought directly. See
+// computeOptimalBatchSplit. buyQuantity/buyUnitCost describe the bought
+// portion; the built portion is quantity - buyQuantity, at unitCost, with
+// its own materials in children (same as a plain "build" node).
 export type BuildTreeNode = {
   typeId: number;
   name: string;
-  decision: "build" | "buy" | "pooled";
+  decision: "build" | "buy" | "pooled" | "hybrid";
   quantity: number;
   unitCost: number;
   subtotal: number;
+  buyQuantity?: number;
+  buyUnitCost?: number;
   children?: BuildTreeNode[];
 };
 
@@ -142,16 +161,22 @@ type PoolOverride = {
   // occurrences in the main tree don't carry their own children once
   // pooled (see buildRealTree).
   materialsSubtree: BuildTreeNode;
+  // Leftover units bought directly rather than produced, when the combined
+  // pooled demand doesn't divide evenly into whole batches and one more
+  // full batch isn't worth it just for the remainder (see
+  // computeOptimalBatchSplit) - folded into the shopping list separately,
+  // since materialsSubtree only ever represents what was actually built.
+  buyQuantity: number;
 };
 
 // Short-TTL, module-level - batches of overlapping/repeated resolves within
 // a few minutes of each other reuse prices instead of re-hitting Janice,
 // per the brief's pricing section. Keyed by pricing source since buy vs
-// split prices differ.
+// sell prices differ.
 const PRICE_CACHE_TTL_MS = 5 * 60 * 1000;
 const priceCache = new Map<string, { price: PriceInfo; expiresAt: number }>();
 
-function priceCacheKey(typeId: number, source: BuyPriceSource): string {
+function priceCacheKey(typeId: number, source: PriceSource): string {
   return `${typeId}:${source}`;
 }
 
@@ -180,14 +205,14 @@ async function collectTreeTypeIds(typeId: number, visited: Set<number>): Promise
 async function getPrices(
   typeIds: number[],
   nameByTypeId: Map<number, string>,
-  buyPriceSource: BuyPriceSource,
+  priceSource: PriceSource,
 ): Promise<Map<number, PriceInfo>> {
   const now = Date.now();
   const result = new Map<number, PriceInfo>();
   const toFetch: number[] = [];
 
   for (const typeId of typeIds) {
-    const cached = priceCache.get(priceCacheKey(typeId, buyPriceSource));
+    const cached = priceCache.get(priceCacheKey(typeId, priceSource));
     if (cached && cached.expiresAt > now) {
       result.set(typeId, cached.price);
     } else {
@@ -202,16 +227,13 @@ async function getPrices(
     .join("\n");
 
   if (itemsText) {
-    const appraisal = await runJaniceAppraisal(itemsText, buyPriceSource);
+    const appraisal = await runJaniceAppraisal(itemsText, priceSource);
     for (const item of appraisal.items) {
       const typeId = item.itemType.eid;
-      const unitPrice =
-        buyPriceSource === "split"
-          ? item.immediatePrices.splitPrice
-          : item.immediatePrices.buyPrice;
+      const unitPrice = priceSource === "sell" ? item.immediatePrices.sellPrice : item.immediatePrices.buyPrice;
       const price: PriceInfo = { unitPrice, m3PerUnit: item.itemType.packagedVolume };
       result.set(typeId, price);
-      priceCache.set(priceCacheKey(typeId, buyPriceSource), {
+      priceCache.set(priceCacheKey(typeId, priceSource), {
         price,
         expiresAt: now + PRICE_CACHE_TTL_MS,
       });
@@ -326,6 +348,12 @@ function combinedMultiplier(
 // there). The buy price is still computed and returned either way, so
 // resolveBuildPlan can surface "buying instead would cost X" without the
 // decision engine itself being swayed by it.
+//
+// productPrices - only consulted when forceBuild is true (i.e. only ever
+// for the root call), sourcing that one informational buy price from the
+// product's own price basis (default sell - what building this is being
+// compared against) rather than `prices`, which is every material's price
+// basis (default buy). Never passed down into the materials recursion.
 async function resolve(
   typeId: number,
   cache: Map<number, ResolvedNode>,
@@ -338,12 +366,13 @@ async function resolve(
   warnings: Set<string>,
   poolOverrides: Map<number, PoolOverride>,
   forceBuild = false,
+  productPrices?: Map<number, PriceInfo>,
 ): Promise<ResolvedNode> {
   const cached = cache.get(typeId);
   if (cached) return cached;
 
   const name = nameByTypeId.get(typeId) ?? `Type ${typeId}`;
-  const buyPrice = getBuyPrice(typeId, name, prices, haulRatePerM3, warnings);
+  const buyPrice = getBuyPrice(typeId, name, forceBuild && productPrices ? productPrices : prices, haulRatePerM3, warnings);
 
   const override = poolOverrides.get(typeId);
   if (override) {
@@ -437,6 +466,51 @@ async function resolve(
   return node;
 }
 
+// A blueprint can only be run a whole number of times, each run producing
+// exactly batchSize units - demand rarely divides evenly into that, so the
+// real choice isn't "build" vs "buy" as an all-or-nothing pair, it's how
+// many WHOLE batches to build (if any) and whether to buy the leftover
+// remainder outright rather than wasting a further batch to cover it.
+//
+// Building a full batch is always at least as good as buying the same
+// units it replaces whenever buildUnitCost < buyPrice (the only case this
+// is ever called for - see the callers), so it's never worth building
+// FEWER than floor(demand / batchSize) whole batches. The only real
+// decision is what to do with what's left over after that: build one MORE
+// batch (wasting batchSize - remainder units, but still cheaper overall if
+// batchSize * buildUnitCost < remainder * buyPrice) or just buy the
+// remainder directly. Used for both a single branch's own real demand
+// (buildRealTree) and combined pooled demand across branches
+// (detectPoolingOpportunities) - the economics are identical either way.
+function computeOptimalBatchSplit(
+  demand: number,
+  batchSize: number,
+  buildUnitCost: number,
+  buyPrice: number,
+): { buildQuantity: number; buyQuantity: number; totalCost: number } {
+  const fullBatches = Math.floor(demand / batchSize);
+  const remainder = demand - fullBatches * batchSize;
+
+  if (remainder === 0) {
+    return { buildQuantity: demand, buyQuantity: 0, totalCost: demand * buildUnitCost };
+  }
+
+  const extraBatchCost = batchSize * buildUnitCost;
+  const remainderBuyCost = remainder * buyPrice;
+
+  if (extraBatchCost < remainderBuyCost) {
+    const buildQuantity = (fullBatches + 1) * batchSize;
+    return { buildQuantity, buyQuantity: 0, totalCost: buildQuantity * buildUnitCost };
+  }
+
+  const buildQuantity = fullBatches * batchSize;
+  return {
+    buildQuantity,
+    buyQuantity: remainder,
+    totalCost: buildQuantity * buildUnitCost + remainder * buyPrice,
+  };
+}
+
 // One (demand, subtotal) pair per occurrence of a typeId encountered while
 // walking the real tree - fed to detectPoolingOpportunities afterward.
 type DemandLog = Map<number, { demand: number; subtotal: number }[]>;
@@ -515,32 +589,52 @@ function buildRealTree(
     return { typeId, name, decision: "buy", quantity: rawQuantity, unitCost: node.buyPrice, subtotal };
   }
 
-  const realBuildQuantity = Math.ceil(rawQuantity / node.outputQuantity) * node.outputQuantity;
-  const realBuildCost = realBuildQuantity * node.unitCost;
-  const realBuyCost = rawQuantity * node.buyPrice;
+  if (skipDemandCheck) {
+    // Root - always fully build the real requested quantity, no buy
+    // comparison and no partial-batch-plus-buy split (see resolve()'s
+    // forceBuild comment); a blueprint still only runs in whole batches,
+    // so this rounds up to the nearest one, same as always.
+    const realBuildQuantity = Math.ceil(rawQuantity / node.outputQuantity) * node.outputQuantity;
+    const realBuildCost = realBuildQuantity * node.unitCost;
+    const children = node.children?.map((child) =>
+      buildRealTree(
+        child.childTypeId,
+        realBuildQuantity * child.quantityPerUnit,
+        cache,
+        nameByTypeId,
+        warnings,
+        poolOverrides,
+        demandLog,
+      ),
+    );
+    logDemand(demandLog, typeId, rawQuantity, realBuildCost);
+    return {
+      typeId,
+      name,
+      decision: "build",
+      quantity: realBuildQuantity,
+      unitCost: node.unitCost,
+      subtotal: realBuildCost,
+      children,
+    };
+  }
 
-  if (!skipDemandCheck && realBuildCost >= realBuyCost) {
-    // Idealized full-batch build looked cheaper, but the batch this
-    // specific demand would actually force (realBuildQuantity, likely
-    // larger than what's needed) costs more than just buying the real
-    // amount - downgrade to buy and stop here; materials that would have
-    // gone into this build are never consumed at all. (Pooling, checked
-    // separately after this whole walk completes, is what can still
-    // recover a "build" here if enough OTHER demand for the same typeId
-    // exists elsewhere in the tree - see resolveBuildPlan.)
-    if (node.outputQuantity > 1) {
-      warnings.add(
-        `${name}: building would need a full batch of ${node.outputQuantity} for only ${rawQuantity} actually needed - buying instead.`,
-      );
-    }
-    logDemand(demandLog, typeId, rawQuantity, realBuyCost);
-    return { typeId, name, decision: "buy", quantity: rawQuantity, unitCost: node.buyPrice, subtotal: realBuyCost };
+  const split = computeOptimalBatchSplit(rawQuantity, node.outputQuantity, node.unitCost, node.buyPrice);
+
+  if (split.buyQuantity === rawQuantity) {
+    // Not even one full batch is worth producing for this demand alone -
+    // buy all of it. (Pooling, checked separately after this whole walk
+    // completes, is what can still recover a build here if enough OTHER
+    // demand for the same typeId exists elsewhere in the tree - see
+    // resolveBuildPlan.)
+    logDemand(demandLog, typeId, rawQuantity, split.totalCost);
+    return { typeId, name, decision: "buy", quantity: rawQuantity, unitCost: node.buyPrice, subtotal: split.totalCost };
   }
 
   const children = node.children?.map((child) =>
     buildRealTree(
       child.childTypeId,
-      realBuildQuantity * child.quantityPerUnit,
+      split.buildQuantity * child.quantityPerUnit,
       cache,
       nameByTypeId,
       warnings,
@@ -549,14 +643,31 @@ function buildRealTree(
     ),
   );
 
-  logDemand(demandLog, typeId, rawQuantity, realBuildCost);
+  logDemand(demandLog, typeId, rawQuantity, split.totalCost);
+
+  if (split.buyQuantity === 0) {
+    return {
+      typeId,
+      name,
+      decision: "build",
+      quantity: split.buildQuantity,
+      unitCost: node.unitCost,
+      subtotal: split.totalCost,
+      children,
+    };
+  }
+
+  // Whole batches worth producing (children above), plus a leftover
+  // remainder that isn't worth a further batch - bought directly instead.
   return {
     typeId,
     name,
-    decision: "build",
-    quantity: realBuildQuantity,
+    decision: "hybrid",
+    quantity: rawQuantity,
     unitCost: node.unitCost,
-    subtotal: realBuildCost,
+    subtotal: split.totalCost,
+    buyQuantity: split.buyQuantity,
+    buyUnitCost: node.buyPrice,
     children,
   };
 }
@@ -601,18 +712,22 @@ async function detectPoolingOpportunities(
 
     const totalDemand = entries.reduce((sum, e) => sum + e.demand, 0);
     const currentCost = entries.reduce((sum, e) => sum + e.subtotal, 0);
-    const pooledQuantity = Math.ceil(totalDemand / idealized.outputQuantity) * idealized.outputQuantity;
-    const pooledBatchCost = pooledQuantity * idealized.unitCost;
+    const split = computeOptimalBatchSplit(totalDemand, idealized.outputQuantity, idealized.unitCost, idealized.buyPrice);
 
-    if (pooledBatchCost >= currentCost) continue; // pooling doesn't actually help here
+    if (split.totalCost >= currentCost) continue; // pooling doesn't actually help here
 
-    // Resolve the one real subtree for producing the whole pooled batch,
+    // Resolve the one real subtree for producing just the WHOLE batches
+    // worth building (split.buildQuantity, already an exact multiple of
+    // outputQuantity - never the possibly-larger old round-up figure) -
     // fresh (empty pool/demand maps - nested pooling within a pooled
     // batch's own materials is intentionally not chased further, a rare
     // enough third-order effect not to be worth the added complexity here).
+    // Whatever demand isn't covered by those batches is bought directly
+    // (split.buyQuantity), folded into the shopping list separately by
+    // resolveBuildPlan rather than through this subtree.
     const materialsSubtree = buildRealTree(
       typeId,
-      pooledQuantity,
+      split.buildQuantity,
       cache,
       nameByTypeId,
       warnings,
@@ -621,12 +736,31 @@ async function detectPoolingOpportunities(
     );
 
     newOverrides.set(typeId, {
-      unitCostPerDemand: pooledBatchCost / totalDemand,
+      unitCostPerDemand: split.totalCost / totalDemand,
       materialsSubtree,
+      buyQuantity: split.buyQuantity,
     });
   }
 
   return newOverrides;
+}
+
+function addShoppingListEntry(
+  out: Map<number, ShoppingListEntry>,
+  typeId: number,
+  name: string,
+  quantity: number,
+  unitCost: number,
+  subtotal: number,
+  volumeM3: number,
+): void {
+  const existing = out.get(typeId);
+  if (existing) {
+    existing.quantity += quantity;
+    existing.subtotal += subtotal;
+    return;
+  }
+  out.set(typeId, { typeId, name, quantity, unitCost, subtotal, volumeM3 });
 }
 
 function accumulateShoppingList(
@@ -635,21 +769,32 @@ function accumulateShoppingList(
   out: Map<number, ShoppingListEntry>,
 ): void {
   if (node.decision === "buy") {
-    const existing = out.get(node.typeId);
-    if (existing) {
-      existing.quantity += node.quantity;
-      existing.subtotal += node.subtotal;
-      return;
-    }
-    out.set(node.typeId, {
-      typeId: node.typeId,
-      name: node.name,
-      quantity: node.quantity,
-      unitCost: node.unitCost,
-      subtotal: node.subtotal,
-      volumeM3: prices.get(node.typeId)?.m3PerUnit ?? 0,
-    });
+    addShoppingListEntry(
+      out,
+      node.typeId,
+      node.name,
+      node.quantity,
+      node.unitCost,
+      node.subtotal,
+      prices.get(node.typeId)?.m3PerUnit ?? 0,
+    );
     return;
+  }
+
+  if (node.decision === "hybrid" && node.buyQuantity && node.buyUnitCost !== undefined) {
+    // The bought portion of this same item - not represented as a child
+    // (children only cover the materials for the BUILT portion), so it
+    // needs its own shopping-list entry alongside recursing into children
+    // below for whatever was actually built.
+    addShoppingListEntry(
+      out,
+      node.typeId,
+      node.name,
+      node.buyQuantity,
+      node.buyUnitCost,
+      node.buyQuantity * node.buyUnitCost,
+      prices.get(node.typeId)?.m3PerUnit ?? 0,
+    );
   }
 
   // "pooled" nodes carry no children (their materials live in the pool's
@@ -661,14 +806,15 @@ function accumulateShoppingList(
 }
 
 function countBuildNodes(node: BuildTreeNode): number {
-  if (node.decision !== "build") return 0;
+  if (node.decision !== "build" && node.decision !== "hybrid") return 0;
   let count = 1;
   for (const child of node.children ?? []) count += countBuildNodes(child);
   return count;
 }
 
 export async function resolveBuildPlan(input: ResolveInput): Promise<BuildResolveResult> {
-  const { targetTypeId, quantity, assumedME, buyPriceSource, haulRatePerM3, characterId } = input;
+  const { targetTypeId, quantity, assumedME, materialPriceSource, productPriceSource, haulRatePerM3, characterId } =
+    input;
 
   const treeTypeIds = new Set<number>();
   await collectTreeTypeIds(targetTypeId, treeTypeIds);
@@ -676,8 +822,13 @@ export async function resolveBuildPlan(input: ResolveInput): Promise<BuildResolv
   const types = await Type.find({ typeId: { $in: [...treeTypeIds] } }).lean();
   const nameByTypeId = new Map(types.map((t) => [t.typeId, t.name]));
 
-  const [prices, adjustedPrices] = await Promise.all([
-    getPrices([...treeTypeIds], nameByTypeId, buyPriceSource),
+  // prices - every material/component in the tree, priced on
+  // materialPriceSource. productPrices - the target item's own price ONLY,
+  // priced separately on productPriceSource (see resolve()'s forceBuild
+  // header comment for why these are deliberately not the same map).
+  const [prices, productPrices, adjustedPrices] = await Promise.all([
+    getPrices([...treeTypeIds], nameByTypeId, materialPriceSource),
+    getPrices([targetTypeId], nameByTypeId, productPriceSource),
     getAdjustedPrices([...treeTypeIds]),
   ]);
 
@@ -719,6 +870,7 @@ export async function resolveBuildPlan(input: ResolveInput): Promise<BuildResolv
       warnings,
       poolOverrides,
       true, // forceBuild - the plan's own target always shows how it's built, see resolve()'s header comment
+      productPrices,
     );
 
     const demandLog: DemandLog = new Map();
@@ -764,10 +916,26 @@ export async function resolveBuildPlan(input: ResolveInput): Promise<BuildResolv
   const shoppingListMap = new Map<number, ShoppingListEntry>();
   accumulateShoppingList(resolvedTree, prices, shoppingListMap);
   // Each pool's own materials (e.g. what it took to actually produce the
-  // shared batch) are resolved once, separately from the main tree - fold
-  // them into the same shopping list / job count exactly once here.
-  for (const override of poolOverrides.values()) {
+  // shared batches) are resolved once, separately from the main tree - fold
+  // them into the same shopping list / job count exactly once here. Any
+  // leftover demand the pool didn't build (buyQuantity - combined demand
+  // that didn't divide evenly into whole batches) is bought directly and
+  // isn't part of materialsSubtree at all, so it needs its own entry too.
+  for (const [typeId, override] of poolOverrides) {
     accumulateShoppingList(override.materialsSubtree, prices, shoppingListMap);
+    if (override.buyQuantity > 0) {
+      const name = nameByTypeId.get(typeId) ?? `Type ${typeId}`;
+      const buyPrice = getBuyPrice(typeId, name, prices, haulRatePerM3, warnings);
+      addShoppingListEntry(
+        shoppingListMap,
+        typeId,
+        name,
+        override.buyQuantity,
+        buyPrice,
+        override.buyQuantity * buyPrice,
+        prices.get(typeId)?.m3PerUnit ?? 0,
+      );
+    }
   }
 
   const totalBuildCost = resolvedTree.subtotal;
@@ -780,7 +948,7 @@ export async function resolveBuildPlan(input: ResolveInput): Promise<BuildResolv
   const totalBuyEverythingCost = getBuyPrice(
     targetTypeId,
     resolvedTree.name,
-    prices,
+    productPrices,
     haulRatePerM3,
     warnings,
   ) * resolvedTree.quantity;

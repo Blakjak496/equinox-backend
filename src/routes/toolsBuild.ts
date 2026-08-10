@@ -180,7 +180,8 @@ toolsBuildRouter.put("/structure-preference", async (req, res) => {
 });
 
 toolsBuildRouter.post("/resolve", async (req, res) => {
-  const { targetItem, quantity, assumedME, buyPriceSource, haulRatePerM3 } = req.body ?? {};
+  const { targetItem, quantity, assumedME, materialPriceSource, productPriceSource, haulRatePerM3 } =
+    req.body ?? {};
 
   const targetTypeId = Number(targetItem);
   const parsedQuantity = Number(quantity);
@@ -195,8 +196,12 @@ toolsBuildRouter.post("/resolve", async (req, res) => {
     res.status(400).json({ ok: false, message: "A valid quantity is required" });
     return;
   }
-  if (buyPriceSource !== "buy" && buyPriceSource !== "split") {
-    res.status(400).json({ ok: false, message: "buyPriceSource must be 'buy' or 'split'" });
+  if (materialPriceSource !== "buy" && materialPriceSource !== "sell") {
+    res.status(400).json({ ok: false, message: "materialPriceSource must be 'buy' or 'sell'" });
+    return;
+  }
+  if (productPriceSource !== "buy" && productPriceSource !== "sell") {
+    res.status(400).json({ ok: false, message: "productPriceSource must be 'buy' or 'sell'" });
     return;
   }
 
@@ -205,7 +210,8 @@ toolsBuildRouter.post("/resolve", async (req, res) => {
       targetTypeId,
       quantity: parsedQuantity,
       assumedME: parsedME,
-      buyPriceSource,
+      materialPriceSource,
+      productPriceSource,
       haulRatePerM3: parsedHaulRate,
       characterId: toolsUser(req).characterId,
     });

@@ -21,10 +21,16 @@ export type ResolveInput = {
   characterId: string;
 };
 
+// "pooled" - this occurrence's material need is covered by one shared
+// production run combined with the SAME typeId's demand from elsewhere in
+// the tree (see the pooling section below) - distinct from "build" (this
+// occurrence has its own dedicated, independent production) so the UI can
+// show it differently and so job/shopping-list counting doesn't double up
+// a batch that's really only produced once.
 export type BuildTreeNode = {
   typeId: number;
   name: string;
-  decision: "build" | "buy";
+  decision: "build" | "buy" | "pooled";
   quantity: number;
   unitCost: number;
   subtotal: number;
@@ -83,16 +89,59 @@ const SCC_SURCHARGE_BY_ACTIVITY: Record<"manufacturing" | "reaction", number> = 
   reaction: 0.04,
 };
 
-// Per-unit result of the memoized bottom-up resolve - unitCost/decision are
-// made once per typeId based purely on that item's own unit economics, per
-// the brief. children carries each material's quantity-per-one-unit-of-this-
-// item so the real tree can be walked out afterward with the actual
-// requested quantity (see buildRealTree).
+// Per-unit result of the memoized bottom-up resolve - decision/unitCost are
+// this typeId's IDEALIZED choice, made once, assuming a perfectly
+// efficient full batch at every level (i.e. as if demand always divides
+// evenly into whole runs, so batching never wastes anything). That's a
+// valid, demand-independent "best case" cost for building - and critically,
+// an idealized 'buy' decision is stable under ANY real demand (batch waste
+// can only make building relatively worse than this best case, never
+// better), so it's never revisited. An idealized 'build' decision, though,
+// can still lose to buying once the REAL demand at a given point in the
+// tree is checked - a blueprint can only run a whole number of times, so a
+// small real demand relative to a large outputQuantity can make the
+// idealized-cheap build option actually more expensive than just buying
+// the real amount needed. buildRealTree does that real, demand-aware
+// re-check (walking top-down, unlike this bottom-up pass) and is the only
+// place a plain decision can flip, always build -> buy, never the reverse
+// (pooling, below, is the one exception - see resolveBuildPlan). buyPrice
+// is carried alongside unitCost (which is buildUnitCost when decision is
+// "build") specifically so that re-check has something to compare real
+// build cost against regardless of this pass's own decision. children
+// carries each material's quantity-per-one-unit-of-this-item so the real
+// tree can be walked out afterward with the actual requested quantity.
+// outputQuantity is the blueprint's batch size (e.g. 40 for any fuel
+// block) - only meaningful when decision === "build".
 type ResolvedNode = {
   typeId: number;
   decision: "build" | "buy";
   unitCost: number;
+  buyPrice: number;
+  outputQuantity: number;
   children?: { childTypeId: number; quantityPerUnit: number }[];
+};
+
+// A pooling decision made ONCE for a typeId that's needed in more than one
+// place in the tree (e.g. two different components both consuming fuel
+// blocks). Rather than each occurrence separately deciding build-vs-buy
+// against only its own local demand (which can make batch waste look
+// worse than it really is - see resolveBuildPlan's header comment),
+// pooling combines their demand into one shared production run when doing
+// so is cheaper overall, and bills each occurrence its fair share.
+type PoolOverride = {
+  // pooledBatchCost / totalDemand - NOT pooledBatchCost / pooledQuantity.
+  // Dividing by total DEMAND (not the possibly-larger produced quantity)
+  // means every occurrence's fair share (its own demand × this rate) sums
+  // EXACTLY to the real batch cost across all occurrences, with no
+  // leftover surplus cost unaccounted for and no arbitrary "first
+  // occurrence pays for the spare units" attribution.
+  unitCostPerDemand: number;
+  // The one real subtree for producing the whole pooled batch (materials
+  // resolved once, at the combined quantity) - folded into the shopping
+  // list and job count separately, exactly once, since individual
+  // occurrences in the main tree don't carry their own children once
+  // pooled (see buildRealTree).
+  materialsSubtree: BuildTreeNode;
 };
 
 // Short-TTL, module-level - batches of overlapping/repeated resolves within
@@ -256,6 +305,13 @@ function combinedMultiplier(
   return combineStructureAndRigMultiplier(structurePercent, rigPercents);
 }
 
+// poolOverrides short-circuits this typeId's normal idealized resolve
+// entirely: once pooled, its "unit cost" for any consumer is the pooled
+// fair-share rate, not a fresh build-vs-buy comparison, and it carries no
+// children here (its own materials are resolved once, separately, into
+// PoolOverride.materialsSubtree) so a consuming parent's own materialUnitCost
+// sum picks up the pooled rate without re-deriving or re-charging for the
+// batch's materials itself.
 async function resolve(
   typeId: number,
   cache: Map<number, ResolvedNode>,
@@ -266,6 +322,7 @@ async function resolve(
   assumedME: number,
   haulRatePerM3: number,
   warnings: Set<string>,
+  poolOverrides: Map<number, PoolOverride>,
 ): Promise<ResolvedNode> {
   const cached = cache.get(typeId);
   if (cached) return cached;
@@ -273,9 +330,22 @@ async function resolve(
   const name = nameByTypeId.get(typeId) ?? `Type ${typeId}`;
   const buyPrice = getBuyPrice(typeId, name, prices, haulRatePerM3, warnings);
 
+  const override = poolOverrides.get(typeId);
+  if (override) {
+    const node: ResolvedNode = {
+      typeId,
+      decision: "build",
+      unitCost: override.unitCostPerDemand,
+      buyPrice,
+      outputQuantity: 1,
+    };
+    cache.set(typeId, node);
+    return node;
+  }
+
   const blueprint = await Blueprint.findOne({ productTypeId: typeId }).lean();
   if (!blueprint) {
-    const node: ResolvedNode = { typeId, decision: "buy", unitCost: buyPrice };
+    const node: ResolvedNode = { typeId, decision: "buy", unitCost: buyPrice, buyPrice, outputQuantity: 1 };
     cache.set(typeId, node);
     return node;
   }
@@ -287,7 +357,7 @@ async function resolve(
         ? "No reaction structure selected - reaction materials are priced as buy-only."
         : "No manufacturing structure selected - manufactured materials are priced as buy-only.",
     );
-    const node: ResolvedNode = { typeId, decision: "buy", unitCost: buyPrice };
+    const node: ResolvedNode = { typeId, decision: "buy", unitCost: buyPrice, buyPrice, outputQuantity: 1 };
     cache.set(typeId, node);
     return node;
   }
@@ -322,6 +392,7 @@ async function resolve(
       assumedME,
       haulRatePerM3,
       warnings,
+      poolOverrides,
     );
     children.push({ childTypeId: material.typeId, quantityPerUnit: perOutputQty });
     materialUnitCost += childNode.unitCost * perOutputQty;
@@ -343,37 +414,195 @@ async function resolve(
     typeId,
     decision,
     unitCost: decision === "build" ? buildUnitCost : buyPrice,
+    buyPrice,
+    outputQuantity: blueprint.outputQuantity,
     children: decision === "build" ? children : undefined,
   };
   cache.set(typeId, node);
   return node;
 }
 
-// Walks the per-unit resolved cache from the top with the real requested
-// quantity, multiplying quantityPerUnit down through the tree - per the
-// brief, this deliberately does NOT dedupe shared components across
-// branches (that's what the shopping list step is for); a component used
-// under two different parents shows up twice here, once per branch, each
-// with its own real quantity in that branch.
+// One (demand, subtotal) pair per occurrence of a typeId encountered while
+// walking the real tree - fed to detectPoolingOpportunities afterward.
+type DemandLog = Map<number, { demand: number; subtotal: number }[]>;
+
+function logDemand(demandLog: DemandLog, typeId: number, demand: number, subtotal: number): void {
+  const entries = demandLog.get(typeId) ?? [];
+  entries.push({ demand, subtotal });
+  demandLog.set(typeId, entries);
+}
+
+// Walks the resolved cache top-down with the real requested quantity,
+// multiplying quantityPerUnit down through the tree - per the brief, this
+// deliberately does NOT dedupe shared components across branches (that's
+// what the shopping list step is for); a component used under two
+// different parents shows up twice here, once per branch, each with its
+// own real quantity in that branch.
+//
+// This is also where an idealized 'build' decision from resolve() gets
+// its real, demand-aware re-check (see the long comment on ResolvedNode
+// for why only 'build' ever needs revisiting, never 'buy'). A blueprint
+// can only be run a whole number of times, each run producing exactly
+// outputQuantity units - e.g. every fuel block blueprint makes 40 per run,
+// so needing 5 means producing 40, not a fractional run, and paying for
+// all 40 whether or not building still comes out cheaper than buying the
+// 5 actually needed once that waste is accounted for. Re-deciding here
+// (rather than trusting resolve()'s idealized, batch-agnostic comparison)
+// is what stops the tool from recommending "build" all the way down a
+// chain purely because building looks cheap at idealized full-batch
+// scale, when the real demand at that point can't fill a batch.
+//
+// Every (typeId, real demand, real cost) triple encountered is logged
+// regardless of decision, whether or not it's already pooled - resolveBuildPlan
+// uses this after each pass to look for NEW pooling opportunities (or
+// confirm there are none left, ending the round loop).
 function buildRealTree(
   typeId: number,
-  quantity: number,
+  rawQuantity: number,
   cache: Map<number, ResolvedNode>,
   nameByTypeId: Map<number, string>,
+  warnings: Set<string>,
+  poolOverrides: Map<number, PoolOverride>,
+  demandLog: DemandLog,
 ): BuildTreeNode {
   const node = cache.get(typeId);
   const name = nameByTypeId.get(typeId) ?? `Type ${typeId}`;
 
   if (!node) {
-    return { typeId, name, decision: "buy", quantity, unitCost: 0, subtotal: 0 };
+    logDemand(demandLog, typeId, rawQuantity, 0);
+    return { typeId, name, decision: "buy", quantity: rawQuantity, unitCost: 0, subtotal: 0 };
   }
 
-  const subtotal = node.unitCost * quantity;
+  if (poolOverrides.has(typeId)) {
+    // resolve() already substituted unitCost = the pooled fair-share rate
+    // for this typeId - no batch re-check needed (outputQuantity is 1 on
+    // the override's synthetic node) and no children here, since the
+    // pooled batch's own materials are accounted for once, via
+    // PoolOverride.materialsSubtree, not per-occurrence.
+    const subtotal = node.unitCost * rawQuantity;
+    logDemand(demandLog, typeId, rawQuantity, subtotal);
+    return { typeId, name, decision: "pooled", quantity: rawQuantity, unitCost: node.unitCost, subtotal };
+  }
+
+  if (node.decision !== "build") {
+    // Idealized 'buy' - stable under any real demand, nothing to re-check.
+    const subtotal = node.buyPrice * rawQuantity;
+    logDemand(demandLog, typeId, rawQuantity, subtotal);
+    return { typeId, name, decision: "buy", quantity: rawQuantity, unitCost: node.buyPrice, subtotal };
+  }
+
+  const realBuildQuantity = Math.ceil(rawQuantity / node.outputQuantity) * node.outputQuantity;
+  const realBuildCost = realBuildQuantity * node.unitCost;
+  const realBuyCost = rawQuantity * node.buyPrice;
+
+  if (realBuildCost >= realBuyCost) {
+    // Idealized full-batch build looked cheaper, but the batch this
+    // specific demand would actually force (realBuildQuantity, likely
+    // larger than what's needed) costs more than just buying the real
+    // amount - downgrade to buy and stop here; materials that would have
+    // gone into this build are never consumed at all. (Pooling, checked
+    // separately after this whole walk completes, is what can still
+    // recover a "build" here if enough OTHER demand for the same typeId
+    // exists elsewhere in the tree - see resolveBuildPlan.)
+    if (node.outputQuantity > 1) {
+      warnings.add(
+        `${name}: building would need a full batch of ${node.outputQuantity} for only ${rawQuantity} actually needed - buying instead.`,
+      );
+    }
+    logDemand(demandLog, typeId, rawQuantity, realBuyCost);
+    return { typeId, name, decision: "buy", quantity: rawQuantity, unitCost: node.buyPrice, subtotal: realBuyCost };
+  }
+
   const children = node.children?.map((child) =>
-    buildRealTree(child.childTypeId, quantity * child.quantityPerUnit, cache, nameByTypeId),
+    buildRealTree(
+      child.childTypeId,
+      realBuildQuantity * child.quantityPerUnit,
+      cache,
+      nameByTypeId,
+      warnings,
+      poolOverrides,
+      demandLog,
+    ),
   );
 
-  return { typeId, name, decision: node.decision, quantity, unitCost: node.unitCost, subtotal, children };
+  logDemand(demandLog, typeId, rawQuantity, realBuildCost);
+  return {
+    typeId,
+    name,
+    decision: "build",
+    quantity: realBuildQuantity,
+    unitCost: node.unitCost,
+    subtotal: realBuildCost,
+    children,
+  };
+}
+
+// Looks across the WHOLE tree just walked for typeIds that showed up more
+// than once (demandLog has >1 entry) and aren't already pooled, and checks
+// whether combining their demand into one shared production run would
+// have cost less than what they collectively cost as resolved. This is
+// the piece that catches the case a purely per-node re-check can't: two
+// components that each independently look cheaper to buy (their own 5-unit
+// need doesn't justify a 40-unit batch) can still be cheaper to build
+// TOGETHER once their combined 10-unit demand is considered - and because
+// building a component cheaper can itself flip THAT component's own
+// build-vs-buy decision (its materials just got cheaper), resolveBuildPlan
+// re-resolves the whole tree from scratch with any newly-found pool
+// applied, repeating until a full pass finds no further improvement.
+async function detectPoolingOpportunities(
+  demandLog: DemandLog,
+  cache: Map<number, ResolvedNode>,
+  poolOverrides: Map<number, PoolOverride>,
+  nameByTypeId: Map<number, string>,
+  prices: Map<number, PriceInfo>,
+  adjustedPrices: Map<number, number>,
+  structuresByActivity: StructuresByActivity,
+  assumedME: number,
+  haulRatePerM3: number,
+  warnings: Set<string>,
+): Promise<Map<number, PoolOverride>> {
+  const newOverrides = new Map<number, PoolOverride>();
+
+  for (const [typeId, entries] of demandLog) {
+    if (entries.length < 2) continue; // only ever needed in one place - nothing to pool
+    if (poolOverrides.has(typeId)) continue; // already pooled in an earlier round
+
+    const idealized = cache.get(typeId);
+    // Idealized 'buy' (or no blueprint at all) can never benefit from
+    // pooling - see the note on ResolvedNode: real/combined demand can
+    // only be equal to or worse than the idealized full-batch figure,
+    // never better, so if that already loses to buying, no amount of
+    // pooling recovers it.
+    if (!idealized || idealized.decision !== "build") continue;
+
+    const totalDemand = entries.reduce((sum, e) => sum + e.demand, 0);
+    const currentCost = entries.reduce((sum, e) => sum + e.subtotal, 0);
+    const pooledQuantity = Math.ceil(totalDemand / idealized.outputQuantity) * idealized.outputQuantity;
+    const pooledBatchCost = pooledQuantity * idealized.unitCost;
+
+    if (pooledBatchCost >= currentCost) continue; // pooling doesn't actually help here
+
+    // Resolve the one real subtree for producing the whole pooled batch,
+    // fresh (empty pool/demand maps - nested pooling within a pooled
+    // batch's own materials is intentionally not chased further, a rare
+    // enough third-order effect not to be worth the added complexity here).
+    const materialsSubtree = buildRealTree(
+      typeId,
+      pooledQuantity,
+      cache,
+      nameByTypeId,
+      warnings,
+      new Map(),
+      new Map(),
+    );
+
+    newOverrides.set(typeId, {
+      unitCostPerDemand: pooledBatchCost / totalDemand,
+      materialsSubtree,
+    });
+  }
+
+  return newOverrides;
 }
 
 function accumulateShoppingList(
@@ -399,6 +628,9 @@ function accumulateShoppingList(
     return;
   }
 
+  // "pooled" nodes carry no children (their materials live in the pool's
+  // own materialsSubtree, folded in separately by resolveBuildPlan) and
+  // aren't buy leaves themselves, so there's nothing to recurse into here.
   for (const child of node.children ?? []) {
     accumulateShoppingList(child, prices, out);
   }
@@ -431,39 +663,104 @@ export async function resolveBuildPlan(input: ResolveInput): Promise<BuildResolv
   );
 
   const warnings = new Set<string>();
-  const cache = new Map<number, ResolvedNode>();
-  await resolve(
-    targetTypeId,
-    cache,
-    prices,
-    adjustedPrices,
-    nameByTypeId,
-    structuresByActivity,
-    assumedME,
-    haulRatePerM3,
-    warnings,
-  );
+  const poolOverrides = new Map<number, PoolOverride>();
+  let tree: BuildTreeNode | null = null;
 
-  const tree = buildRealTree(targetTypeId, quantity, cache, nameByTypeId);
+  // Feeding a newly-found pool back into resolve() (not just patching the
+  // final tree) means the existing bottom-up cost math already handles
+  // knock-on effects correctly with no special-casing: a component that
+  // consumes a now-cheaper pooled material gets a genuinely lower
+  // materialUnitCost from resolve() itself, which can flip THAT
+  // component's own build-vs-buy decision too, and so on up the chain.
+  // Pooling can only ever make costs go down (never up - it's only ever
+  // applied when strictly cheaper) and buy prices never change, so a
+  // decision can flip build-favoring at most once per typeId across
+  // rounds and never flip back - the loop is guaranteed to terminate; the
+  // round cap below is just a safety net against an unforeseen bug, not
+  // something expected to actually get hit.
+  const MAX_POOLING_ROUNDS = 8;
+  let converged = false;
+
+  for (let round = 0; round < MAX_POOLING_ROUNDS; round++) {
+    const cache = new Map<number, ResolvedNode>();
+    await resolve(
+      targetTypeId,
+      cache,
+      prices,
+      adjustedPrices,
+      nameByTypeId,
+      structuresByActivity,
+      assumedME,
+      haulRatePerM3,
+      warnings,
+      poolOverrides,
+    );
+
+    const demandLog: DemandLog = new Map();
+    tree = buildRealTree(targetTypeId, quantity, cache, nameByTypeId, warnings, poolOverrides, demandLog);
+
+    const newOverrides = await detectPoolingOpportunities(
+      demandLog,
+      cache,
+      poolOverrides,
+      nameByTypeId,
+      prices,
+      adjustedPrices,
+      structuresByActivity,
+      assumedME,
+      haulRatePerM3,
+      warnings,
+    );
+
+    if (newOverrides.size === 0) {
+      converged = true;
+      break;
+    }
+    for (const [typeId, override] of newOverrides) poolOverrides.set(typeId, override);
+  }
+
+  if (!converged) {
+    warnings.add(
+      "Pooling opportunities across shared components didn't fully settle within the usual number of passes - results may be conservative in places.",
+    );
+  }
+
+  const resolvedTree = tree!;
 
   const shoppingListMap = new Map<number, ShoppingListEntry>();
-  accumulateShoppingList(tree, prices, shoppingListMap);
+  accumulateShoppingList(resolvedTree, prices, shoppingListMap);
+  // Each pool's own materials (e.g. what it took to actually produce the
+  // shared batch) are resolved once, separately from the main tree - fold
+  // them into the same shopping list / job count exactly once here.
+  for (const override of poolOverrides.values()) {
+    accumulateShoppingList(override.materialsSubtree, prices, shoppingListMap);
+  }
 
-  const totalBuildCost = tree.subtotal;
+  const totalBuildCost = resolvedTree.subtotal;
+  // tree.quantity, not the raw requested quantity - if the target itself
+  // is a batched build (e.g. asking for 5 fuel blocks, batch size 40),
+  // the plan actually produces/needs 40, so "what would buying instead
+  // have cost" has to compare against that same real quantity, not the 5
+  // originally typed, or the comparison and percent-saved figures below
+  // would be comparing two different quantities against each other.
   const totalBuyEverythingCost = getBuyPrice(
     targetTypeId,
-    tree.name,
+    resolvedTree.name,
     prices,
     haulRatePerM3,
     warnings,
-  ) * quantity;
+  ) * resolvedTree.quantity;
   const totalBuyVolumeM3 = [...shoppingListMap.values()].reduce(
     (sum, entry) => sum + entry.volumeM3 * entry.quantity,
     0,
   );
 
+  const jobCount =
+    countBuildNodes(resolvedTree) +
+    [...poolOverrides.values()].reduce((sum, o) => sum + countBuildNodes(o.materialsSubtree), 0);
+
   return {
-    target: { typeId: targetTypeId, name: tree.name, quantity },
+    target: { typeId: targetTypeId, name: resolvedTree.name, quantity: resolvedTree.quantity },
     summary: {
       totalBuildCost,
       totalBuyEverythingCost,
@@ -472,10 +769,10 @@ export async function resolveBuildPlan(input: ResolveInput): Promise<BuildResolv
         totalBuyEverythingCost > 0
           ? ((totalBuyEverythingCost - totalBuildCost) / totalBuyEverythingCost) * 100
           : 0,
-      jobCount: countBuildNodes(tree),
+      jobCount,
       totalBuyVolumeM3,
     },
-    tree,
+    tree: resolvedTree,
     shoppingList: [...shoppingListMap.values()].sort((a, b) => b.subtotal - a.subtotal),
     warnings: [...warnings],
   };

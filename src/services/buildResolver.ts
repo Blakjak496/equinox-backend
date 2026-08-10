@@ -424,23 +424,30 @@ async function resolve(
   const name = nameByTypeId.get(typeId) ?? `Type ${typeId}`;
   const buyPrice = getBuyPrice(typeId, name, forceBuild && productPrices ? productPrices : prices, haulRatePerM3, warnings);
 
+  // Looked up once, applied at every cache.set() below rather than
+  // short-circuiting here before the blueprint lookup (the previous
+  // shape) - a pooled typeId's own REAL blueprint-derived children/
+  // outputQuantity/jobUnitCost still need to exist in `cache`, not just
+  // its overridden unitCost, so that reconsiderPoolOverrides can later
+  // re-derive this typeId's OWN materials subtree (excluding itself from
+  // poolOverrides to avoid the short-circuit, but still needing the real
+  // recipe to recurse into - see reconsiderPoolOverrides). Callers of THIS
+  // typeId are unaffected either way: buildRealTree's own poolOverrides
+  // check intercepts before ever looking at node.children, so populating
+  // them here for a pooled typeId is inert for every other caller, not
+  // just harmless overhead.
   const override = poolOverrides.get(typeId);
-  if (override) {
+
+  const blueprint = await Blueprint.findOne({ productTypeId: typeId }).lean();
+  if (!blueprint) {
     const node: ResolvedNode = {
       typeId,
-      decision: "build",
-      unitCost: override.unitCostPerDemand,
+      decision: "buy",
+      unitCost: override?.unitCostPerDemand ?? buyPrice,
       buyPrice,
       outputQuantity: 1,
       jobUnitCost: 0,
     };
-    cache.set(typeId, node);
-    return node;
-  }
-
-  const blueprint = await Blueprint.findOne({ productTypeId: typeId }).lean();
-  if (!blueprint) {
-    const node: ResolvedNode = { typeId, decision: "buy", unitCost: buyPrice, buyPrice, outputQuantity: 1, jobUnitCost: 0 };
     cache.set(typeId, node);
     return node;
   }
@@ -452,7 +459,14 @@ async function resolve(
         ? "No reaction structure selected - reaction materials are priced as buy-only."
         : "No manufacturing structure selected - manufactured materials are priced as buy-only.",
     );
-    const node: ResolvedNode = { typeId, decision: "buy", unitCost: buyPrice, buyPrice, outputQuantity: 1, jobUnitCost: 0 };
+    const node: ResolvedNode = {
+      typeId,
+      decision: "buy",
+      unitCost: override?.unitCostPerDemand ?? buyPrice,
+      buyPrice,
+      outputQuantity: 1,
+      jobUnitCost: 0,
+    };
     cache.set(typeId, node);
     return node;
   }
@@ -503,12 +517,18 @@ async function resolve(
   const sccSurcharge = SCC_SURCHARGE_BY_ACTIVITY[blueprint.activity];
   const jobUnitCost = eivPerUnit * (costIndex * costMultiplier + facilityTaxRate + sccSurcharge);
   const buildUnitCost = materialUnitCost + jobUnitCost;
-  const decision: "build" | "buy" = forceBuild || buildUnitCost < buyPrice ? "build" : "buy";
+  // A pooled typeId is always "build" here, same as forceBuild - it was
+  // only ever pooled because the combined batch beat buying (see
+  // detectPoolingOpportunities), and unitCost is the pool's real rate, not
+  // this idealized buildUnitCost - but children/outputQuantity/jobUnitCost
+  // below still come from the real blueprint regardless, for
+  // reconsiderPoolOverrides' benefit (see this function's header comment).
+  const decision: "build" | "buy" = forceBuild || override || buildUnitCost < buyPrice ? "build" : "buy";
 
   const node: ResolvedNode = {
     typeId,
     decision,
-    unitCost: decision === "build" ? buildUnitCost : buyPrice,
+    unitCost: override ? override.unitCostPerDemand : decision === "build" ? buildUnitCost : buyPrice,
     buyPrice,
     outputQuantity: blueprint.outputQuantity,
     jobUnitCost,
@@ -870,21 +890,34 @@ async function detectPoolingOpportunities(
 
     // Resolve the one real subtree for producing just the WHOLE batches
     // worth building (idealizedSplit.buildQuantity, already an exact
-    // multiple of outputQuantity) - fresh (empty pool/demand maps - nested
-    // pooling within a pooled batch's own materials is intentionally not
-    // chased further, a rare enough third-order effect not to be worth the
-    // added complexity here). This subtree's own subtotal is already the
-    // REAL, self-consistent cost (see buildRealTree), which is what
-    // actually gets charged below - not the idealized estimate above,
-    // which was only ever a filter to avoid this recursion when it's
-    // obviously not going to help.
+    // multiple of outputQuantity) - using the REAL, shared poolOverrides
+    // map (not a fresh empty one), so if this pool's own blueprint needs
+    // an item that's ALSO independently pooled, buildRealTree correctly
+    // takes the "pooled" short-circuit and bills this occurrence its fair
+    // share of THAT pool's real rate, instead of re-deriving that item
+    // from scratch as a local, non-pooled build/hybrid node. Getting this
+    // wrong doesn't just miss an optimization - it double-counts: the
+    // re-derived item's own materials would be folded into the shopping
+    // list a second time (once via its own pool, once buried in here) and
+    // its job cost likewise double-summed (see sumJobCost's per-pool
+    // loop in resolveBuildPlan). A pool discovered earlier in THIS SAME
+    // detectPoolingOpportunities pass still won't be visible yet (see
+    // newOverrides below - not merged into poolOverrides until the whole
+    // pass returns), so a same-round nested pair can still land here once
+    // non-pooled; resolveBuildPlan's round loop re-derives every
+    // established pool's materialsSubtree after each round specifically to
+    // catch and correct that case on the next pass. This subtree's own
+    // subtotal is already the REAL, self-consistent cost (see
+    // buildRealTree), which is what actually gets charged below - not the
+    // idealized estimate above, which was only ever a filter to avoid this
+    // recursion when it's obviously not going to help.
     const materialsSubtree = buildRealTree(
       typeId,
       idealizedSplit.buildQuantity,
       cache,
       nameByTypeId,
       warnings,
-      new Map(),
+      poolOverrides,
       new Map(),
     );
     const realPoolCost = materialsSubtree.totalCost + idealizedSplit.buyQuantity * idealized.buyPrice;
@@ -905,6 +938,90 @@ async function detectPoolingOpportunities(
   }
 
   return newOverrides;
+}
+
+// Re-derives EVERY already-established pool's total demand AND real cost
+// from the CURRENT round's merged demand log (the main tree's demand PLUS
+// every pool's own materials demand, walked into the SAME log - see
+// resolveBuildPlan's round loop), not just its cost against a frozen old
+// demand figure. Total demand, not just cost, can genuinely change here:
+// pooling a typeId changes how much of ITS OWN materials it really needs -
+// before A pools, each of A's N independent occurrences rounds its own
+// small demand up to a full batch, wasting some; once pooled, A is built
+// as ONE shared batch instead of N separate wasteful ones, so a material
+// of A's (B, if it's ALSO pooled) sees its true combined demand actually
+// DROP, not just its rate improve. Getting this wrong doesn't just miss an
+// optimization - a stale, too-high totalDemand overstates B's own
+// unitCostPerDemand (dividing B's real batch cost by more demand than
+// genuinely exists), which is exactly the shape of error that produced
+// the original Input Cost vs shopping list mismatch this whole mechanism
+// exists to fix.
+//
+// Deliberately never REMOVES an established pool, even if its
+// reconsidered demand collapses to a single remaining source (still fine -
+// computeOptimalBatchSplit handles a single-source demand correctly on
+// its own) - once pooled, stays pooled. The residual imprecision from not
+// "unpooling" a source that dries up is small, and un-pooling risks real
+// oscillation (unpool -> that typeId's occurrences go back to being
+// decided independently -> their combined demand reappears -> repool ->
+// repeat).
+function reconsiderPoolOverrides(
+  demandLog: DemandLog,
+  cache: Map<number, ResolvedNode>,
+  poolOverrides: Map<number, PoolOverride>,
+  nameByTypeId: Map<number, string>,
+  warnings: Set<string>,
+): boolean {
+  let changed = false;
+
+  for (const [typeId, current] of poolOverrides) {
+    const entries = demandLog.get(typeId);
+    if (!entries || entries.length === 0) continue; // not referenced anywhere this round - shouldn't normally happen for an established pool, but fail safe rather than drop it
+
+    const idealized = cache.get(typeId);
+    if (!idealized) continue; // same fail-safe as above
+
+    const totalDemand = entries.reduce((sum, e) => sum + e.demand, 0);
+    const idealizedSplit = computeOptimalBatchSplit(totalDemand, idealized.outputQuantity, idealized.unitCost, idealized.buyPrice);
+
+    // Exclude this typeId's own (about-to-be-replaced) entry before
+    // recursing into its own materials - passing the live map as-is would
+    // make buildRealTree immediately take the "pooled" short-circuit for
+    // typeId ITSELF, turning this into a no-op self-reference instead of
+    // an actual re-derivation. EVE blueprints don't have real circular
+    // material dependencies, so this typeId shouldn't appear again deeper
+    // in its own subtree either way.
+    const poolOverridesExcludingSelf = new Map(poolOverrides);
+    poolOverridesExcludingSelf.delete(typeId);
+    const materialsSubtree = buildRealTree(
+      typeId,
+      idealizedSplit.buildQuantity,
+      cache,
+      nameByTypeId,
+      warnings,
+      poolOverridesExcludingSelf,
+      new Map(),
+    );
+
+    if (
+      materialsSubtree.quantity === current.materialsSubtree.quantity &&
+      idealizedSplit.buyQuantity === current.buyQuantity &&
+      materialsSubtree.totalCost === current.materialsSubtree.totalCost
+    ) {
+      continue; // nothing actually changed - cheap to detect and skip
+    }
+
+    const realPoolCost = materialsSubtree.totalCost + idealizedSplit.buyQuantity * idealized.buyPrice;
+    poolOverrides.set(typeId, {
+      unitCostPerDemand: totalDemand > 0 ? realPoolCost / totalDemand : 0,
+      materialsSubtree,
+      buyQuantity: idealizedSplit.buyQuantity,
+      jobCost: sumJobCost(materialsSubtree),
+    });
+    changed = true;
+  }
+
+  return changed;
 }
 
 function addShoppingListEntry(
@@ -1073,8 +1190,13 @@ export async function resolveBuildPlan(input: ResolveInput): Promise<BuildResolv
   // decision can flip build-favoring at most once per typeId across
   // rounds and never flip back - the loop is guaranteed to terminate; the
   // round cap below is just a safety net against an unforeseen bug, not
-  // something expected to actually get hit.
-  const MAX_POOLING_ROUNDS = 8;
+  // something expected to actually get hit. Bumped from the original 8 -
+  // reconsiderPoolOverrides (below) can now take an extra round or two to
+  // fully settle a chain of nested pools (a pool whose own material is
+  // itself pooled, whose own material is itself pooled...), and each of
+  // those still only ever pushes cost down, so a slightly higher cap costs
+  // nothing when it's not needed and just gives deep trees enough room.
+  const MAX_POOLING_ROUNDS = 12;
   let converged = false;
 
   for (let round = 0; round < MAX_POOLING_ROUNDS; round++) {
@@ -1106,6 +1228,42 @@ export async function resolveBuildPlan(input: ResolveInput): Promise<BuildResolv
       true, // skipDemandCheck - matches forceBuild above, see buildRealTree's header comment
     );
 
+    // Also walk every ALREADY-established pool's own real materials into
+    // this SAME shared demand log (not a throwaway one) - a pool's own
+    // demand for its materials doesn't otherwise appear in demandLog at
+    // all once the main tree short-circuits through it (buildRealTree's
+    // "pooled" branch never recurses into children) - reconsiderPoolOverrides
+    // below needs this to correctly re-derive a nested pool's TRUE combined
+    // demand, which can shrink once an upstream pool eliminates its own
+    // batch waste (see that function's header comment).
+    //
+    // Walked into a LOCAL log first, not the shared one directly - every
+    // buildRealTree call also logs demand for the typeId it's given at its
+    // OWN top level, not just for its children (see buildRealTree's own
+    // logDemand calls). Merging that raw would add a phantom "this pool
+    // needs itself" entry equal to its own build quantity on top of its
+    // REAL demand from elsewhere, inflating totalDemand further next
+    // round, inflating buildQuantity further the round after, without
+    // bound - deleting that one self-entry before merging is what keeps
+    // this walk purely about the pool's CHILDREN's demand, which is all
+    // it's here for.
+    for (const [typeId, override] of poolOverrides) {
+      const poolOverridesExcludingSelf = new Map(poolOverrides);
+      poolOverridesExcludingSelf.delete(typeId);
+      const poolMaterialsDemand: DemandLog = new Map();
+      buildRealTree(
+        typeId,
+        override.materialsSubtree.quantity,
+        cache,
+        nameByTypeId,
+        warnings,
+        poolOverridesExcludingSelf,
+        poolMaterialsDemand,
+      );
+      poolMaterialsDemand.delete(typeId);
+      mergeDemandLog(poolMaterialsDemand, demandLog);
+    }
+
     const newOverrides = await detectPoolingOpportunities(
       demandLog,
       cache,
@@ -1119,11 +1277,20 @@ export async function resolveBuildPlan(input: ResolveInput): Promise<BuildResolv
       warnings,
     );
 
-    if (newOverrides.size === 0) {
+    let changed = newOverrides.size > 0;
+    for (const [typeId, override] of newOverrides) poolOverrides.set(typeId, override);
+
+    // Re-derive every established pool's total demand AND cost from the
+    // same merged demand log above - see reconsiderPoolOverrides' header
+    // comment for why this is more than a cost refresh.
+    if (reconsiderPoolOverrides(demandLog, cache, poolOverrides, nameByTypeId, warnings)) {
+      changed = true;
+    }
+
+    if (!changed) {
       converged = true;
       break;
     }
-    for (const [typeId, override] of newOverrides) poolOverrides.set(typeId, override);
   }
 
   if (!converged) {

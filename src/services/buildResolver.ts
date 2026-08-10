@@ -639,7 +639,7 @@ function mergeDemandLog(from: DemandLog, into: DemandLog): void {
 // reintroducing the exact problem forceBuild exists to avoid.
 function buildRealTree(
   typeId: number,
-  rawQuantity: number,
+  rawQuantityInput: number,
   cache: Map<number, ResolvedNode>,
   nameByTypeId: Map<number, string>,
   warnings: Set<string>,
@@ -647,6 +647,25 @@ function buildRealTree(
   demandLog: DemandLog,
   skipDemandCheck = false,
 ): BuildTreeNode {
+  // Every quantity in this tree is a literal count of physical items (ships,
+  // modules, minerals, fuel blocks - nothing in EVE comes in fractional
+  // units) and is mathematically guaranteed to be a whole number by
+  // construction: a parent's real build quantity is always an exact integer
+  // multiple of its own outputQuantity (see computeOptimalBatchSplit), and
+  // each child's quantityPerUnit is itself a pre-rounded whole material
+  // count divided by that SAME outputQuantity (see resolve()'s children
+  // loop) - so outputQuantity always cancels out exactly in principle.
+  // "In principle" is the catch: across many nested levels of floating-
+  // point division and multiplication (a capital ship's tree easily has
+  // 5+ levels), the result can land a hair off its true integer - e.g.
+  // 3536.999999999995 instead of 3537. That's invisible almost everywhere
+  // else (formatNumber's 2-decimal rounding hides it on screen), but the
+  // shopping list's copy-to-clipboard text pastes the raw number verbatim,
+  // and Janice (or anything else parsing it literally) reproduces the
+  // noise exactly. Rounding here, the one place every quantity in the tree
+  // gets computed, cleans it up at the source rather than needing every
+  // downstream consumer to know to do it themselves.
+  const rawQuantity = Math.round(rawQuantityInput);
   const node = cache.get(typeId);
   const name = nameByTypeId.get(typeId) ?? `Type ${typeId}`;
 

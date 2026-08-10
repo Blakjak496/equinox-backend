@@ -1214,8 +1214,13 @@ export async function resolveBuildPlan(input: ResolveInput): Promise<BuildResolv
     getBuyPrice(targetTypeId, resolvedTree.name, productPrices, haulRatePerM3, warnings) * resolvedTree.quantity;
   if (targetMarketPrice > 0 && totalCost > targetMarketPrice) {
     const percentMore = ((totalCost - targetMarketPrice) / targetMarketPrice) * 100;
+    // JBV/JSV - which side of the market this price came from (see
+    // productPriceSource) - the number alone doesn't say whether it's a
+    // Jita Buy or Jita Sell value, and that materially changes how much
+    // to trust it.
+    const priceLabel = productPriceSource === "sell" ? "JSV" : "JBV";
     warnings.add(
-      `Buying ${resolvedTree.name} directly would cost ${targetMarketPrice.toLocaleString(undefined, { maximumFractionDigits: 2 })} ISK - building it costs ${percentMore.toFixed(1)}% more, likely an illiquid/unreliable market price for an item this size. The build breakdown below is shown regardless, since that's what this tool is for.`,
+      `Buying ${resolvedTree.name} directly would cost ${targetMarketPrice.toLocaleString(undefined, { maximumFractionDigits: 2 })} ISK (${priceLabel}) - building it costs ${percentMore.toFixed(1)}% more.`,
     );
   }
 

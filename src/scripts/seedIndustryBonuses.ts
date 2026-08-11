@@ -24,18 +24,31 @@ const RIG_ATTRS = {
   reaction: { material: 2714, cost: null, time: 2713 }, // confirmed: no cost rig for reactions
 } as const;
 
-// groupID, not just name, is required to identify these reliably - the
-// SDE has an unrelated item (a "Large Collidable Object", typeId 58735,
-// groupID 226) that also happens to be named "Azbel", confirmed live. Real
-// Engineering Complexes share groupID 1404, real Refineries share 1406.
-const ENGINEERING_COMPLEX_GROUP_ID = 1404;
-const REFINERY_GROUP_ID = 1406;
-const STRUCTURE_TYPE_NAMES: { name: string; groupId: number; activity: "manufacturing" | "reaction" }[] = [
-  { name: "Raitaru", groupId: ENGINEERING_COMPLEX_GROUP_ID, activity: "manufacturing" },
-  { name: "Azbel", groupId: ENGINEERING_COMPLEX_GROUP_ID, activity: "manufacturing" },
-  { name: "Sotiyo", groupId: ENGINEERING_COMPLEX_GROUP_ID, activity: "manufacturing" },
-  { name: "Athanor", groupId: REFINERY_GROUP_ID, activity: "reaction" },
-  { name: "Tatara", groupId: REFINERY_GROUP_ID, activity: "reaction" },
+// Whole structure LINES, not a hand-picked list of individual names - every
+// real type in these three groups gets seeded, faction variants included
+// automatically. Real industry facilities scanned live include Fortizars
+// (normal and faction) and Keepstars even though the Citadel line carries
+// no manufacturing bonus attribute of its own (unlike Engineering
+// Complexes) - a Citadel can still host a manufacturing job (just with no
+// structure-level ME/cost reduction, and no industry rig slots of its own
+// either - toPercent(null) below already renders that correctly as "no
+// bonus" rather than excluding the structure as a choice entirely). Any
+// structure someone can actually scan and pick in-game should be pickable
+// here too - filtering the list down to only the ones with bonuses was the
+// bug, not a feature.
+//
+// Matched by real groupID, looked up by groupNAME from the live SDE below
+// (not a hardcoded groupID number) - same "confirmed against real data"
+// standard as the rest of this file, and it sidesteps name collisions
+// entirely: matching used to require typeName AND groupId together because
+// the SDE has an unrelated item ("Large Collidable Object", typeId 58735)
+// that also happens to be named "Azbel" - groupID-only matching never looks
+// at typeName for matching purposes at all, so that collision (and any
+// other same-name coincidence) can't happen here regardless.
+const STRUCTURE_GROUP_NAMES: { groupName: string; activity: "manufacturing" | "reaction" }[] = [
+  { groupName: "Citadel", activity: "manufacturing" }, // Astrahus/Fortizar/Keepstar + faction variants
+  { groupName: "Engineering Complex", activity: "manufacturing" }, // Raitaru/Azbel/Sotiyo
+  { groupName: "Refinery", activity: "reaction" }, // Athanor/Tatara
 ];
 
 // Ordered, most-specific-first - matched against a real rig's own type
@@ -111,7 +124,7 @@ type DgmTypeAttributeRow = {
   valueInt: string;
   valueFloat: string;
 };
-type InvGroupsRow = { groupID: string; categoryID: string };
+type InvGroupsRow = { groupID: string; categoryID: string; groupName: string };
 
 async function fetchCsv<T>(filename: string): Promise<T[]> {
   const url = `${BASE_URL}/${filename}`;
@@ -156,10 +169,21 @@ async function run() {
     invGroups.map((row) => [Number(row.groupID), Number(row.categoryID)]),
   );
 
+  // groupID looked up by groupNAME (not hardcoded) - see STRUCTURE_GROUP_NAMES'
+  // header comment for why.
+  const groupIdByGroupName = new Map(invGroups.map((row) => [row.groupName, Number(row.groupID)]));
+  const activityByStructureGroupId = new Map<number, "manufacturing" | "reaction">();
+  for (const { groupName, activity } of STRUCTURE_GROUP_NAMES) {
+    const groupId = groupIdByGroupName.get(groupName);
+    if (groupId == null) {
+      console.warn(`Could not find groupID for structure group "${groupName}" in invGroups.csv - skipping.`);
+      continue;
+    }
+    activityByStructureGroupId.set(groupId, activity);
+  }
+
   // -- find every real structure type + rig type --
-  const structureCandidates = invTypes.filter((row) =>
-    STRUCTURE_TYPE_NAMES.some((s) => s.name === row.typeName && s.groupId === Number(row.groupID)),
-  );
+  const structureCandidates = invTypes.filter((row) => activityByStructureGroupId.has(Number(row.groupID)));
   const rigCandidates = invTypes.filter(
     (row) => RIG_NAME_PATTERN.test(row.typeName) && !row.typeName.includes("Blueprint"),
   );
@@ -195,9 +219,7 @@ async function run() {
 
   for (const row of structureCandidates) {
     const typeId = Number(row.typeID);
-    const activity = STRUCTURE_TYPE_NAMES.find(
-      (s) => s.name === row.typeName && s.groupId === Number(row.groupID),
-    )!.activity;
+    const activity = activityByStructureGroupId.get(Number(row.groupID))!;
     const attrs = STRUCTURE_ATTRS[activity];
 
     // Rounded to 4dp - (multiplier - 1) * 100 on a binary float (e.g. 0.99)
@@ -274,6 +296,21 @@ async function run() {
   console.log(
     `IndustryBonusType: ${bonusResult?.upsertedCount ?? 0} inserted, ${bonusResult?.modifiedCount ?? 0} updated`,
   );
+
+  // Prune any previously-seeded doc that's no longer a real candidate under
+  // the CURRENT matching rules above - bulkWrite upserts only ever add or
+  // update, never remove, so a matching rule that used to be wrong (e.g.
+  // the old typeName+groupId matching, which could seed an unrelated
+  // same-named item - a real "Large Collidable Object" also happens to be
+  // named "Azbel" in the SDE) leaves its bad doc sitting there forever once
+  // the rule is fixed, since the fix just adds the CORRECT doc under its
+  // own typeId alongside the old wrong one rather than replacing it - which
+  // is exactly how two "Azbel" entries (one with real bonuses, one with
+  // none) ended up in the admin dropdown at once.
+  const pruneResult = await IndustryBonusType.deleteMany({ typeId: { $nin: [...relevantTypeIds] } });
+  if (pruneResult.deletedCount > 0) {
+    console.log(`Pruned ${pruneResult.deletedCount} stale IndustryBonusType doc(s) no longer matched by current rules.`);
+  }
 
   // Backfill groupId/categoryId onto every Type doc already seeded (by
   // seedBlueprints.ts) - run that script first. classifyProductCategory

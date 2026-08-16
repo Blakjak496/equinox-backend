@@ -6,15 +6,6 @@ import {
   EveCredentials,
 } from "../lib/eveSsoClient";
 
-// EVE Cortex's own SSO application (CORTEX_EVE_CLIENT_ID/SECRET) - separate
-// dev portal app from both the admin app (EVE_CLIENT_ID) and the Tools
-// app (TOOLS_EVE_CLIENT_ID), since Cortex requests a much larger scope set
-// than either. Server-driven PKCE authorization-code flow: unlike
-// toolsSso.ts (which receives an already-obtained code+codeVerifier from a
-// client that ran the PKCE dance itself), this module owns the redirect to
-// EVE and back, since Cortex's session is a cookie the backend sets on the
-// callback response, not a token handed to a client to manage.
-
 const AUTHORIZE_URL = "https://login.eveonline.com/v2/oauth/authorize";
 
 const SCOPES = [
@@ -93,10 +84,7 @@ export function generatePkceChallenge(): PkceChallenge {
   return { verifier, challenge };
 }
 
-// prompt=login forces CCP's account-chooser screen instead of silently
-// reusing whichever character this browser last authenticated as - without
-// it, "Add a different character" is confusing (see the brief's CCP SSO
-// note): the user picks "add character" but lands back on the same one.
+// prompt=login forces CCP's account-chooser instead of reusing the last character on this browser
 export function buildAuthorizeUrl(state: string, pkce: PkceChallenge): string {
   const { clientId, callbackUrl } = getCredentials();
   const url = new URL(AUTHORIZE_URL);
@@ -155,9 +143,7 @@ async function resolveFromToken(token: {
   expiresIn: number;
 }): Promise<CortexSsoResult> {
   const { characterId, ownerHash, scopes } = parseAccessTokenClaims(token.accessToken);
-  // The JWT's own `name` claim can be stale after a character rename -
-  // ESI's character info is the live value, so that's used for the name
-  // too rather than trusting the token's copy.
+  // ESI's character name is used instead of the JWT's, which can be stale after a rename
   const { corporationId, allianceId, characterName } = await fetchEveCharacterInfo(
     characterId,
     token.accessToken,
@@ -191,9 +177,7 @@ export async function exchangeCortexCode(
   return resolveFromToken(token);
 }
 
-// Re-exchanges a stored refresh token. Per CCP's rotation, always returns a
-// brand new refresh token - the caller must persist it in place of the old
-// one (see services/cortexAuth.ts's refreshCharacterTokens).
+// caller must persist the new refresh token - CCP rotates it on every use
 export async function refreshCortexTokens(refreshToken: string): Promise<CortexSsoResult> {
   const { callbackUrl: _callbackUrl, ...credentials } = getCredentials();
   const body = new URLSearchParams();

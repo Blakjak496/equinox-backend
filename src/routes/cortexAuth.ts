@@ -26,10 +26,7 @@ function getFrontendUrl(): string {
   return url;
 }
 
-// Shared by /login and /link - which one it was doesn't change anything
-// about how the redirect is built. The callback below is what actually
-// decides login-vs-link behavior, and it does that by looking up the
-// character, not by remembering which endpoint started the flow.
+// /login and /link both just start the same redirect - callback decides the outcome
 function startAuth(res: Response): void {
   const state = crypto.randomBytes(16).toString("base64url");
   const pkce = generatePkceChallenge();

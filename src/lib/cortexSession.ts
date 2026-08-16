@@ -1,19 +1,11 @@
 import crypto from "crypto";
 import { Request, Response, NextFunction } from "express";
 
-// EVE Cortex's own session mechanism - a signed httpOnly cookie, not a DB
-// session table and not the existing Tools app's client-managed bearer
-// token (see lib/toolsAuth.ts). The cookie never carries an EVE token,
-// only opaque ids, so it doesn't need that system's refresh-token-theft
-// rotation/reuse-detection scheme - just standard cookie-session hygiene.
-// Same hand-rolled HMAC-SHA256 JWT-shaped approach as toolsAuth.ts, for the
-// same reason: a short, single-purpose token isn't worth a JWT dependency.
-
 const SESSION_COOKIE = "cortex_session";
 const OAUTH_STATE_COOKIE = "cortex_oauth_state";
 
-const SESSION_TTL_SECONDS = 30 * 24 * 60 * 60; // 30 days
-const OAUTH_STATE_TTL_SECONDS = 10 * 60; // 10 minutes - just long enough for the SSO round trip
+const SESSION_TTL_SECONDS = 30 * 24 * 60 * 60;
+const OAUTH_STATE_TTL_SECONDS = 10 * 60;
 
 function getSessionSecret(): string {
   const secret = process.env.CORTEX_SESSION_SECRET;
@@ -67,12 +59,6 @@ function verify<T>(token: string): (T & { iat: number; exp: number }) | null {
   }
 }
 
-// --- Cookie plumbing -------------------------------------------------
-// No cookie-parser middleware is installed anywhere in this app (the Tools
-// app doesn't use cookies at all), so this hand-rolls the tiny bit of
-// parsing/serializing Cortex actually needs rather than adding a
-// dependency for it.
-
 function parseCookies(req: Request): Record<string, string> {
   const header = req.headers.cookie;
   if (!header) return {};
@@ -96,11 +82,7 @@ function setCookie(res: Response, name: string, value: string, maxAgeSeconds: nu
     "SameSite=Lax",
     `Max-Age=${maxAgeSeconds}`,
   ];
-  // Secure requires HTTPS - only add it in production so local dev over
-  // plain http:// still gets the cookie back. nox-tools proxies every
-  // Cortex request through its own origin (see next.config.ts), so this
-  // cookie is always same-origin from the browser's point of view and
-  // never needs SameSite=None.
+  // production only - Secure requires HTTPS, local dev runs on http://
   if (process.env.NODE_ENV === "production") parts.push("Secure");
   res.append("Set-Cookie", parts.join("; "));
 }
@@ -108,8 +90,6 @@ function setCookie(res: Response, name: string, value: string, maxAgeSeconds: nu
 function clearCookie(res: Response, name: string): void {
   res.append("Set-Cookie", `${name}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`);
 }
-
-// --- Session cookie ----------------------------------------------------
 
 export type CortexSessionPayload = {
   accountId: string;
@@ -124,9 +104,6 @@ export function clearSessionCookie(res: Response): void {
   clearCookie(res, SESSION_COOKIE);
 }
 
-// Reads the session without requiring one to be present - the SSO callback
-// branches its own behavior on whether this returns null (see
-// services/cortexAuth.ts), it doesn't reject the request.
 export function getCortexSession(req: Request): CortexSessionPayload | null {
   const token = parseCookies(req)[SESSION_COOKIE];
   if (!token) return null;
@@ -148,12 +125,6 @@ export function requireCortexAuth(req: Request, res: Response, next: NextFunctio
   (req as CortexAuthedRequest).cortexSession = session;
   next();
 }
-
-// --- OAuth handshake cookie ---------------------------------------------
-// Bridges the redirect-to-EVE and callback-from-EVE requests, which the
-// stateless backend has no other shared state between. Signed so a client
-// can't forge a codeVerifier/state pairing, short-lived since the whole
-// round trip should take seconds.
 
 export type OAuthStatePayload = {
   state: string;

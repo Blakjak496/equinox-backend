@@ -1,14 +1,3 @@
-// Generic CCP SSO plumbing - the raw token-endpoint call and JWT decoding
-// are identical across every app registered in the dev portal; only the
-// credentials and which claims a caller reads back out differ. Extracted
-// here because that mechanic was duplicated across exchangeEveCode.ts
-// (admin app), toolsSso.ts (Tools app), and esiClient.ts (background
-// service-character refresh) even before cortexSso.ts existed - a fourth
-// near-identical copy wasn't worth adding.
-//
-// Not touching those three existing call sites to use this - they belong
-// to other live apps sharing this backend and weren't part of this change.
-
 const TOKEN_URL = "https://login.eveonline.com/v2/oauth/token";
 
 export type EveCredentials = { clientId: string; clientSecret: string };
@@ -52,9 +41,7 @@ export async function requestEveToken(
   };
 }
 
-// No signature verification - every caller gets this token straight from
-// CCP's token endpoint over TLS, not from anything client-supplied, so
-// there's nothing an unverified signature would be protecting against here.
+// not verified - token comes straight from CCP over TLS, nothing client-supplied to protect against
 export function decodeEveJwtPayload(token: string): Record<string, unknown> {
   const [, payload] = token.split(".");
   const padded =

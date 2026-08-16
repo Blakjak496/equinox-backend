@@ -4,9 +4,6 @@ import { encrypt, decrypt } from "../lib/crypto";
 import { CortexSsoResult, refreshCortexTokens } from "./cortexSso";
 import { CortexSessionPayload } from "../lib/cortexSession";
 
-// Proactively refresh anything expiring within this window, rather than
-// waiting for ESI to actually reject an expired token (see the brief's
-// "Token refresh" section).
 const REFRESH_MARGIN_MS = 5 * 60 * 1000;
 
 function toTokenFields(sso: CortexSsoResult) {
@@ -23,28 +20,19 @@ function toTokenFields(sso: CortexSsoResult) {
   };
 }
 
-// --- SSO callback --------------------------------------------------------
-// The one rule everything below follows (per the brief): the deciding
-// factor is never "is there a session", it's "does a Character row already
-// exist for this eve_character_id" - checked first, before session state.
-// That's what makes logging back in with any already-linked character
-// resolve to the same Account instead of minting a new one.
-
 export type CallbackOutcome =
   | { ok: true; session: CortexSessionPayload }
   | { ok: false; reason: "character_linked_elsewhere" };
 
+// eve_character_id is looked up first, always - not session state - so logging back in
+// with any already-linked character resolves to the same account instead of a new one
 export async function handleCortexCallback(
   sso: CortexSsoResult,
   existingSession: CortexSessionPayload | null,
 ): Promise<CallbackOutcome> {
   let found = await CortexCharacter.findOne({ eveCharacterId: sso.characterId });
 
-  // owner_hash changed since we last linked this character id - CCP's
-  // owner of it has changed (sold/transferred). The old link no longer
-  // represents anyone's access; whoever is authenticating right now (with
-  // a token CCP just issued, proving *current* ownership) is treated
-  // exactly as if this were a brand new character to link.
+  // owner_hash changed = character was sold/transferred since we linked it; treat as new
   if (found && found.ownerHash !== sso.ownerHash) {
     console.warn(
       `[cortexAuth] owner hash changed for character ${sso.characterId} - discarding stale link (was account ${found.accountId})`,
@@ -63,10 +51,6 @@ export async function handleCortexCallback(
     await found.save();
 
     const accountId = String(found.accountId);
-    // A session already active for this same account (re-login, or an
-    // "add character" callback for a character already linked) keeps
-    // whatever was active - only a fresh session initializes active to the
-    // character just used to log in.
     const activeCharacterId = existingSession
       ? existingSession.activeCharacterId
       : String(found._id);
@@ -93,8 +77,6 @@ export async function handleCortexCallback(
   return { ok: true, session: { accountId, activeCharacterId } };
 }
 
-// --- Unlink ----------------------------------------------------------
-
 export type UnlinkOutcome =
   | { ok: true; loggedOut: false; session: CortexSessionPayload }
   | { ok: true; loggedOut: true }
@@ -114,10 +96,6 @@ export async function unlinkCharacter(
     return { ok: true, loggedOut: false, session };
   }
 
-  // Unlinked the active character - fall back to another linked one for
-  // this session. If that was the last character on the account, there's
-  // nothing meaningful left to be "logged in" as, so log out entirely
-  // rather than carry a session with no active character.
   const fallback = await CortexCharacter.findOne({ accountId: session.accountId });
   if (!fallback) return { ok: true, loggedOut: true };
 
@@ -128,18 +106,10 @@ export async function unlinkCharacter(
   };
 }
 
-// --- Delete account ------------------------------------------------
-// Removes every linked character (and their stored tokens) along with the
-// Account itself, in one go - not a loop of individual unlinks, since
-// those each do fallback-active-character bookkeeping that's pointless
-// when the whole account is going away.
-
 export async function deleteAccount(session: CortexSessionPayload): Promise<void> {
   await CortexCharacter.deleteMany({ accountId: session.accountId });
   await CortexAccount.findByIdAndDelete(session.accountId);
 }
-
-// --- Switch active character -----------------------------------------
 
 export type SwitchOutcome =
   | { ok: true; session: CortexSessionPayload }
@@ -155,8 +125,6 @@ export async function switchActiveCharacter(
 
   return { ok: true, session: { accountId: session.accountId, activeCharacterId: characterId } };
 }
-
-// --- Reading characters (never exposes tokens) ------------------------
 
 export type PublicCortexCharacter = {
   id: string;
@@ -187,12 +155,6 @@ export async function getAccountCharacters(accountId: string): Promise<PublicCor
   return characters.map(toPublic);
 }
 
-// --- Token refresh -----------------------------------------------------
-// Shared by the proactive background job (refreshDueCharacters) and any
-// tool route that needs a guaranteed-fresh access token on demand
-// (getValidAccessToken) - both funnel through the same owner-hash check
-// and needsRelink flagging so there's exactly one place that logic lives.
-
 async function refreshCharacterTokens(character: ICortexCharacter): Promise<void> {
   let fresh: CortexSsoResult;
   try {
@@ -220,9 +182,6 @@ async function refreshCharacterTokens(character: ICortexCharacter): Promise<void
   await character.save();
 }
 
-// On-demand access token for a per-character tool route. Refreshes first
-// if the cached token is due, so callers never have to think about
-// expiry themselves - no separate background job needed for this.
 export async function getValidAccessToken(characterId: string): Promise<string> {
   const character = await CortexCharacter.findById(characterId);
   if (!character) throw new Error("Character not found");

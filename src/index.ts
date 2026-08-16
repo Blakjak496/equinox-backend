@@ -18,6 +18,7 @@ import toolsAuthRouter from "./routes/toolsAuth";
 import toolsRouter from "./routes/tools";
 import { requireToolsAuth } from "./lib/toolsAuth";
 import cortexAuthRouter from "./routes/cortexAuth";
+import cortexStatusRouter from "./routes/cortexStatus";
 import { BuybackGroup } from "./models/BuybackGroup";
 
 dotenv.config();
@@ -43,6 +44,7 @@ app.use("/equinox/admin", adminAuth, adminRouter);
 app.use("/equinox/tools-auth", toolsAuthRouter);
 app.use("/equinox/tools", requireToolsAuth, toolsRouter);
 app.use("/equinox/cortex/auth", cortexAuthRouter);
+app.use("/equinox/cortex", cortexStatusRouter);
 app.use("/equinox", publicRouter);
 
 app.get("/equinox/health", (req, res) => {
